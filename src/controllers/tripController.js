@@ -9,6 +9,122 @@ const {
   parsePositiveInteger,
 } = require('../utils/validation');
 
+const populateDestinations = {
+  path: 'destinations.destination_id',
+};
+
+const normalizeAndValidateDestinations = async (destinations) => {
+  if (!Array.isArray(destinations) || destinations.length === 0) {
+    throw new AppError('Destinations minimal berisi 1 destinasi', 400);
+  }
+
+  const normalized = destinations.map((item, index) => {
+    if (!item || typeof item !== 'object') {
+      throw new AppError(`destinations[${index}] tidak valid`, 400);
+    }
+
+    assertObjectId(item.destination_id, `destinations[${index}].destination_id`);
+
+    return {
+      destination_id: item.destination_id,
+      visit_order: parsePositiveInteger(
+        item.visit_order,
+        `destinations[${index}].visit_order`
+      ),
+      notes: typeof item.notes === 'string' ? item.notes.trim() : item.notes,
+    };
+  });
+
+  const destinationIds = normalized.map((item) => String(item.destination_id));
+  if (new Set(destinationIds).size !== destinationIds.length) {
+    throw new AppError('Destination yang sama tidak boleh ditambahkan dua kali', 400);
+  }
+
+  const visitOrders = normalized.map((item) => item.visit_order);
+  if (new Set(visitOrders).size !== visitOrders.length) {
+    throw new AppError('visit_order tidak boleh duplikat', 400);
+  }
+
+  const existingDestinationCount = await Destination.countDocuments({
+    _id: { $in: destinationIds },
+  });
+  if (existingDestinationCount !== destinationIds.length) {
+    throw new AppError('Satu atau lebih destination_id tidak ditemukan', 400);
+  }
+
+  return normalized.sort((a, b) => a.visit_order - b.visit_order);
+};
+
+// POST /trips - membuat trip dengan banyak destinasi
+const createTrip = async (req, res, next) => {
+  try {
+    const destinations = await normalizeAndValidateDestinations(
+      req.body.destinations
+    );
+
+    const trip = await Trip.create({
+      ...req.body,
+      destinations,
+      created_by: req.user._id,
+    });
+    await trip.populate(populateDestinations);
+
+    res.status(201).json({
+      status: 'success',
+      data: { trip },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// PATCH /trips/:id - memperbarui trip dan relasi destinasinya
+const updateTrip = async (req, res, next) => {
+  try {
+    assertObjectId(req.params.id, 'trip_id');
+
+    const allowedFields = [
+      'title',
+      'description',
+      'destinations',
+      'price',
+      'quota',
+      'duration_days',
+      'departure_date',
+      'itinerary',
+      'facilities',
+      'status',
+    ];
+    const updates = {};
+
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    }
+
+    if (updates.destinations !== undefined) {
+      updates.destinations = await normalizeAndValidateDestinations(
+        updates.destinations
+      );
+    }
+
+    const trip = await Trip.findById(req.params.id);
+    if (!trip) {
+      return next(new AppError('Trip tidak ditemukan', 404));
+    }
+
+    Object.assign(trip, updates);
+    await trip.save();
+    await trip.populate(populateDestinations);
+
+    res.status(200).json({
+      status: 'success',
+      data: { trip },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // GET /trips - explore semua trip aktif dengan filter, sort, pagination
 const getAllTrips = async (req, res, next) => {
   try {
@@ -42,20 +158,22 @@ const getAllTrips = async (req, res, next) => {
 
     if (destination_id) {
       assertObjectId(destination_id, 'destination_id');
-      filter.destination_id = destination_id;
+      filter['destinations.destination_id'] = destination_id;
     } else if (destination || city) {
       const locationRegex = {
         $regex: escapeRegex(destination || city),
         $options: 'i',
       };
-      const destinations = await Destination.find({
+      const matchingDestinations = await Destination.find({
         $or: [
           { city: locationRegex },
           { province: locationRegex },
           { country: locationRegex },
         ],
       }).select('_id');
-      filter.destination_id = { $in: destinations.map((item) => item._id) };
+      filter['destinations.destination_id'] = {
+        $in: matchingDestinations.map((item) => item._id),
+      };
     }
 
     if (minPrice !== undefined || maxPrice !== undefined) {
@@ -98,12 +216,12 @@ const getAllTrips = async (req, res, next) => {
     const skip = (pageNumber - 1) * limitNumber;
     const [trips, total] = await Promise.all([
       Trip.find(filter)
-        .populate('destination_id')
+        .populate(populateDestinations)
         .sort(sortQuery)
         .skip(skip)
         .limit(limitNumber)
         .select(
-          'title description destination_id price quota duration_days departure_date facilities'
+          'title description destinations price quota duration_days departure_date facilities'
         ),
       Trip.countDocuments(filter),
     ]);
@@ -131,7 +249,7 @@ const getTripById = async (req, res, next) => {
       status: 'active',
     })
       .populate('created_by', 'name')
-      .populate('destination_id');
+      .populate(populateDestinations);
 
     if (!trip) {
       return next(new AppError('Trip tidak ditemukan', 404));
@@ -188,6 +306,8 @@ const getTripReviews = async (req, res, next) => {
 };
 
 module.exports = {
+  createTrip,
+  updateTrip,
   getAllTrips,
   getTripById,
   getTripReviews,

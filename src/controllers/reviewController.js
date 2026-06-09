@@ -75,8 +75,8 @@ const getMyReviews = async (req, res, next) => {
     const reviews = await Review.find({ user_id: req.user._id })
       .populate({
         path: 'trip_id',
-        select: 'title destination_id',
-        populate: { path: 'destination_id' },
+        select: 'title destinations',
+        populate: { path: 'destinations.destination_id' },
       })
       .sort({ createdAt: -1 });
 

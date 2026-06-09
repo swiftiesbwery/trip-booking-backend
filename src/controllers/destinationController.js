@@ -60,7 +60,7 @@ const getDestinationById = async (req, res, next) => {
     }
 
     const trips = await Trip.find({
-      destination_id: destination._id,
+      'destinations.destination_id': destination._id,
       status: 'active',
       departure_date: { $gte: new Date() },
     })

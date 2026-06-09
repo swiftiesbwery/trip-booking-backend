@@ -7,6 +7,7 @@ Express, MongoDB/Mongoose, JWT, bcryptjs, dan Multer.
 
 ```bash
 npm install
+npm run migrate:trip-destinations
 npm start
 ```
 
@@ -62,6 +63,8 @@ Login:
 | GET | `/api/trips` | Tidak | Daftar trip aktif yang belum berangkat |
 | GET | `/api/trips/:id` | Tidak | Detail trip dan ringkasan rating |
 | GET | `/api/trips/:id/reviews` | Tidak | Review pada trip |
+| POST | `/api/trips` | Admin | Membuat trip dengan banyak destinasi |
+| PATCH | `/api/trips/:id` | Admin | Memperbarui trip dan destinasinya |
 | GET | `/api/destinations` | Tidak | Daftar destinasi |
 | GET | `/api/destinations/:id` | Tidak | Detail destinasi dan trip aktifnya |
 
@@ -74,6 +77,25 @@ Contoh filter:
 ```
 
 Nilai `sort`: `departure_date`, `price_asc`, `price_desc`, atau `newest`.
+
+Format `destinations` pada create/update trip:
+
+```json
+{
+  "destinations": [
+    {
+      "destination_id": "64abc123...",
+      "visit_order": 1,
+      "notes": "Hari pertama"
+    },
+    {
+      "destination_id": "64abc456...",
+      "visit_order": 2,
+      "notes": "Hari kedua"
+    }
+  ]
+}
+```
 
 ### Booking dan Pembayaran
 
@@ -134,6 +156,15 @@ Review:
 `trip_id` boleh ikut dikirim dan akan divalidasi terhadap booking. Satu user
 hanya dapat membuat satu review untuk trip yang sama. Booking yang dibatalkan
 tidak dapat direview.
+
+## Migrasi Relasi Trip
+
+Jalankan satu kali untuk mengubah data lama `destination_id` menjadi array
+`destinations` tanpa menghapus trip yang sudah ada:
+
+```bash
+npm run migrate:trip-destinations
+```
 
 ## Catatan Data
 

@@ -9,6 +9,30 @@ const itinerarySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const tripDestinationSchema = new mongoose.Schema(
+  {
+    destination_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Destination',
+      required: [true, 'destination_id wajib diisi'],
+    },
+    visit_order: {
+      type: Number,
+      required: [true, 'visit_order wajib diisi'],
+      min: [1, 'visit_order minimal 1'],
+      validate: {
+        validator: Number.isInteger,
+        message: 'visit_order harus berupa angka bulat',
+      },
+    },
+    notes: {
+      type: String,
+      trim: true,
+    },
+  },
+  { _id: false }
+);
+
 const tripSchema = new mongoose.Schema(
   {
     title: {
@@ -20,10 +44,14 @@ const tripSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Deskripsi trip wajib diisi'],
     },
-    destination_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Destination',
-      required: true,
+    destinations: {
+      type: [tripDestinationSchema],
+      required: [true, 'Destinations wajib diisi'],
+      validate: {
+        validator: (destinations) =>
+          Array.isArray(destinations) && destinations.length > 0,
+        message: 'Destinations minimal berisi 1 destinasi',
+      },
     },
     price: {
       type: Number,
@@ -61,7 +89,7 @@ const tripSchema = new mongoose.Schema(
 );
 
 // Index untuk filter yang sering digunakan
-tripSchema.index({ destination_id: 1 });
+tripSchema.index({ 'destinations.destination_id': 1 });
 tripSchema.index({ price: 1 });
 tripSchema.index({ departure_date: 1 });
 tripSchema.index({ status: 1 });

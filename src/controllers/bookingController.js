@@ -70,8 +70,8 @@ const createBooking = async (req, res, next) => {
     // Populate untuk response yang informatif
     await booking.populate({
       path: 'trip_id',
-      select: 'title destination_id price departure_date',
-      populate: { path: 'destination_id' },
+      select: 'title destinations price departure_date',
+      populate: { path: 'destinations.destination_id' },
     });
 
     res.status(201).json({
@@ -207,7 +207,7 @@ const getMyBookings = async (req, res, next) => {
       Booking.find(filter)
         .populate({
           path: 'trip_id',
-          populate: { path: 'destination_id' },
+          populate: { path: 'destinations.destination_id' },
         })
         .populate('payment_id')
         .sort({ createdAt: -1 })
@@ -240,7 +240,7 @@ const getBookingById = async (req, res, next) => {
     })
       .populate({
         path: 'trip_id',
-        populate: { path: 'destination_id' },
+        populate: { path: 'destinations.destination_id' },
       })
       .populate('payment_id');
 
