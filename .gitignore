@@ -1,0 +1,7 @@
+node_modules/
+.env
+uploads/payments/*
+!uploads/payments/.gitkeep
+.agents/
+.codex/
+npm-debug.log*
