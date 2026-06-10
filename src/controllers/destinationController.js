@@ -62,10 +62,9 @@ const getDestinationById = async (req, res, next) => {
     const trips = await Trip.find({
       'destinations.destination_id': destination._id,
       status: 'active',
-      departure_date: { $gte: new Date() },
     })
-      .sort({ departure_date: 1 })
-      .select('title price quota duration_days departure_date facilities');
+      .sort({ start_date: 1, departure_date: 1 })
+      .select('title image_url price quota start_date end_date duration_days departure_date facilities');
 
     res.status(200).json({
       status: 'success',

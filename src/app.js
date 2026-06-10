@@ -11,6 +11,9 @@ const tripRoutes = require('./routes/tripRoutes');
 const destinationRoutes = require('./routes/destinationRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
+const wishlistRoutes = require('./routes/wishlistRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
 
 const app = express();
 
@@ -33,6 +36,9 @@ app.use('/api/trips', tripRoutes);
 app.use('/api/destinations', destinationRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/wishlists', wishlistRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // Route tidak ditemukan
 app.all('*', (req, res) => {

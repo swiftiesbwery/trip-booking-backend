@@ -6,16 +6,20 @@ const {
   uploadPayment,
   getMyBookings,
   getBookingById,
+  cancelBooking,
+  getMyPayments,
 } = require('../controllers/bookingController');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, restrictTo } = require('../middleware/authMiddleware');
 const upload = require('../middleware/uploadMiddleware');
 
 // Semua route booking butuh login
-router.use(protect);
+router.use(protect, restrictTo('user'));
 
 router.post('/', createBooking);
 router.get('/my', getMyBookings);
+router.get('/payments/my', getMyPayments);
 router.get('/:id', getBookingById);
+router.patch('/:id/cancel', cancelBooking);
 router.post(
   '/:id/payment',
   authorizePaymentBooking,

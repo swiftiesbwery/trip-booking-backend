@@ -137,7 +137,9 @@ const getAllTrips = async (req, res, next) => {
       maxPrice,
       minDays,
       maxDays,
-      sort = 'departure_date',
+      startDate,
+      endDate,
+      sort = 'start_date',
       page = 1,
       limit = 9,
     } = req.query;
@@ -149,7 +151,6 @@ const getAllTrips = async (req, res, next) => {
     });
     const filter = {
       status: 'active',
-      departure_date: { $gte: new Date() },
     };
 
     if (search) {
@@ -202,8 +203,27 @@ const getAllTrips = async (req, res, next) => {
       }
     }
 
+    if (startDate !== undefined || endDate !== undefined) {
+      filter.start_date = {};
+      if (startDate !== undefined) {
+        const parsed = new Date(startDate);
+        if (Number.isNaN(parsed.getTime())) {
+          return next(new AppError('startDate tidak valid', 400));
+        }
+        filter.start_date.$gte = parsed;
+      }
+      if (endDate !== undefined) {
+        const parsed = new Date(endDate);
+        if (Number.isNaN(parsed.getTime())) {
+          return next(new AppError('endDate tidak valid', 400));
+        }
+        filter.start_date.$lte = parsed;
+      }
+    }
+
     const sortOptions = {
       departure_date: { departure_date: 1 },
+      start_date: { start_date: 1 },
       price_asc: { price: 1 },
       price_desc: { price: -1 },
       newest: { createdAt: -1 },
@@ -221,7 +241,7 @@ const getAllTrips = async (req, res, next) => {
         .skip(skip)
         .limit(limitNumber)
         .select(
-          'title description destinations price quota duration_days departure_date facilities'
+          'title image_url description destinations price quota start_date end_date duration_days departure_date facilities'
         ),
       Trip.countDocuments(filter),
     ]);

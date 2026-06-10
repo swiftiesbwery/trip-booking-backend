@@ -17,7 +17,12 @@ const destinationSchema = new mongoose.Schema(
       default: 'Indonesia',
       trim: true,
     },
-    image_url: String
+    image_url: String,
+    price: {
+      type: Number,
+      required: [true, 'Harga destinasi wajib diisi'],
+      min: [0, 'Harga destinasi tidak boleh negatif'],
+    },
   },
   { timestamps: true }
 );

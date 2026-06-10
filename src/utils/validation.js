@@ -33,9 +33,27 @@ const assertObjectId = (value, field = 'id') => {
   }
 };
 
+const parseDate = (value, field) => {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) {
+    throw new AppError(`${field} harus berupa tanggal yang valid`, 400);
+  }
+  return date;
+};
+
+const pickFields = (source, allowedFields) => {
+  const result = {};
+  for (const field of allowedFields) {
+    if (source[field] !== undefined) result[field] = source[field];
+  }
+  return result;
+};
+
 module.exports = {
   assertObjectId,
   escapeRegex,
   parseNonNegativeNumber,
   parsePositiveInteger,
+  parseDate,
+  pickFields,
 };

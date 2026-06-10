@@ -21,10 +21,10 @@ const paymentSchema = new mongoose.Schema(
       min: [1, 'Jumlah pembayaran harus lebih dari 0'],
     },
 
-    payment_method: {
+    method: {
       type: String,
-      enum: ['transfer', 'ewallet', 'cash'],
-      default: 'transfer',
+      enum: ['QRIS', 'Transfer Bank', 'Debit/Kredit'],
+      required: [true, 'Metode pembayaran wajib diisi'],
     },
 
     proof_url: {
@@ -33,8 +33,8 @@ const paymentSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['pending', 'verified', 'rejected'],
-      default: 'pending',
+      enum: ['pending', 'checking', 'verified'],
+      default: 'checking',
     },
   },
   { timestamps: true }

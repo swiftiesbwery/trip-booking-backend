@@ -30,6 +30,12 @@ const register = async (req, res, next) => {
     if (!name?.trim() || !email?.trim() || !password) {
       return next(new AppError('Nama, email, dan password wajib diisi', 400));
     }
+    if (typeof password !== 'string' || password.length < 6) {
+      return next(new AppError('Password minimal 6 karakter', 400));
+    }
+    if (phone !== undefined && typeof phone !== 'string') {
+      return next(new AppError('Phone harus berupa string', 400));
+    }
 
     const normalizedEmail = email.trim().toLowerCase();
     const existingUser = await User.findOne({ email: normalizedEmail });
