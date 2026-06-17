@@ -29,7 +29,7 @@ const bookingSchema = new mongoose.Schema(
     },
     visit_date: {
       type: Date,
-      required: [true, 'visit_date wajib diisi'],
+      default: null,
     },
     payment_id: {
       type: mongoose.Schema.Types.ObjectId,

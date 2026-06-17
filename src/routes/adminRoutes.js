@@ -11,7 +11,7 @@ router.route('/trips/:id/destinations').get(admin.listTripDestinations).post(adm
 router.delete('/trips/:id/destinations/:destinationId', admin.removeTripDestination);
 
 router.route('/destinations').get(admin.listDestinations).post(admin.createDestination);
-router.route('/destinations/:id').get(admin.getDestination).patch(admin.updateDestination).delete(admin.deleteDestination);
+router.route('/destinations/:id').get(admin.getDestination).put(admin.updateDestination).patch(admin.updateDestination).delete(admin.deleteDestination);
 
 router.get('/bookings', admin.listBookings);
 router.get('/bookings/:id', admin.getBooking);
@@ -24,5 +24,7 @@ router.patch('/payments/:id/status', admin.updatePaymentStatus);
 router.get('/users', admin.listUsers);
 router.get('/users/:id', admin.getUser);
 router.patch('/users/:id/verification', admin.updateUserVerification);
+
+router.get('/reviews', admin.listReviews);
 
 module.exports = router;

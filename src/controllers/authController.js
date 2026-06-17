@@ -1,6 +1,9 @@
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const AppError = require('../utils/AppError');
+const { safeMirror, syncUser } = require('../services/sqlMirrorService');
+const sqlRead = require('../services/sqlReadService');
 
 // Helper: buat JWT token
 const signToken = (id) => {
@@ -14,6 +17,7 @@ const sendTokenResponse = (user, statusCode, res) => {
   const token = signToken(user._id);
   // Hapus password dari output
   user.password = undefined;
+  user.password_hash = undefined;
 
   res.status(statusCode).json({
     status: 'success',
@@ -38,7 +42,9 @@ const register = async (req, res, next) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const existingUser = await User.findOne({ email: normalizedEmail });
+    const existingUser =
+      (await sqlRead.getUserByEmail(normalizedEmail)) ||
+      (await User.findOne({ email: normalizedEmail }));
     if (existingUser) {
       return next(new AppError('Email sudah terdaftar', 400));
     }
@@ -49,6 +55,7 @@ const register = async (req, res, next) => {
       password,
       phone,
     });
+    await safeMirror(`user ${user._id}`, () => syncUser(user));
     sendTokenResponse(user, 201, res);
   } catch (err) {
     next(err);
@@ -64,11 +71,8 @@ const login = async (req, res, next) => {
       return next(new AppError('Email dan password wajib diisi', 400));
     }
 
-    // Gunakan .select('+password') karena field password di-hide by default
-    const user = await User.findOne({ email: email.trim().toLowerCase() }).select(
-      '+password'
-    );
-    if (!user || !(await user.comparePassword(password))) {
+    const user = await sqlRead.getUserByEmail(email.trim().toLowerCase());
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       return next(new AppError('Email atau password salah', 401));
     }
 
@@ -81,9 +85,10 @@ const login = async (req, res, next) => {
 // GET /auth/me
 const getMe = async (req, res, next) => {
   try {
+    const user = await sqlRead.getUserByMongoId(String(req.user._id));
     res.status(200).json({
       status: 'success',
-      data: { user: req.user },
+      data: { user: user || req.user },
     });
   } catch (err) {
     next(err);

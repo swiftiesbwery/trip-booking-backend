@@ -40,6 +40,20 @@ const tripSchema = new mongoose.Schema(
       required: [true, 'Judul trip wajib diisi'],
       trim: true,
     },
+    country: {
+      type: String,
+      default: 'Indonesia',
+      trim: true,
+    },
+    city: {
+      type: String,
+      trim: true,
+    },
+    category: {
+      type: String,
+      enum: ['domestic', 'international'],
+      default: 'domestic',
+    },
     image_url: {
       type: String,
       trim: true,
@@ -105,5 +119,6 @@ tripSchema.index({ price: 1 });
 tripSchema.index({ departure_date: 1 });
 tripSchema.index({ start_date: 1, end_date: 1 });
 tripSchema.index({ status: 1 });
+tripSchema.index({ category: 1, country: 1 });
 
 module.exports = mongoose.model('Trip', tripSchema);

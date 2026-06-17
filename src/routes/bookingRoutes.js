@@ -16,6 +16,7 @@ const upload = require('../middleware/uploadMiddleware');
 router.use(protect, restrictTo('user'));
 
 router.post('/', createBooking);
+router.get('/', getMyBookings);
 router.get('/my', getMyBookings);
 router.get('/payments/my', getMyPayments);
 router.get('/:id', getBookingById);

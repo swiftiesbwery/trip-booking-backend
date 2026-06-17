@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "migrate:trip-destinations": "node scripts/migrateTripDestinations.js"
+    "migrate:trip-destinations": "node scripts/migrateTripDestinations.js",
+    "seed:admin": "node scripts/seedAdmin.js",
+    "test:dual-write": "node scripts/testDualWrite.js",
+    "test:wishlist": "node scripts/testWishlist.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -14,7 +17,8 @@
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^7.6.3",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.22.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

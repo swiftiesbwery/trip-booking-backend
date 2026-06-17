@@ -17,6 +17,11 @@ const destinationSchema = new mongoose.Schema(
       default: 'Indonesia',
       trim: true,
     },
+    category: {
+      type: String,
+      enum: ['domestic', 'international'],
+      default: 'domestic',
+    },
     image_url: String,
     price: {
       type: Number,
@@ -28,6 +33,7 @@ const destinationSchema = new mongoose.Schema(
 );
 
 destinationSchema.index({ city: 1, province: 1, country: 1 });
+destinationSchema.index({ category: 1, country: 1 });
 
 module.exports =
   mongoose.model(

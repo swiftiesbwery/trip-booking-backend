@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const AppError = require('../utils/AppError');
+const sqlRead = require('../services/sqlReadService');
 
 // Middleware: wajib login
 const protect = async (req, res, next) => {
@@ -19,13 +21,16 @@ const protect = async (req, res, next) => {
     // Verifikasi token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Cek user masih ada di DB
-    const user = await User.findById(decoded.id);
+    // Cek user masih ada. Token lama memakai ObjectId Mongo, data SQL-only
+    // memakai public id dari kolom users.mongo_id.
+    const user = mongoose.isValidObjectId(decoded.id)
+      ? await User.findById(decoded.id)
+      : await sqlRead.getUserByMongoId(decoded.id);
     if (!user) {
       return next(new AppError('User tidak ditemukan', 401));
     }
 
-    req.user = user;
+    req.user = (await sqlRead.getUserByMongoId(String(user._id))) || user;
     next();
   } catch (err) {
     if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {

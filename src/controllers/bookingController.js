@@ -1,72 +1,104 @@
 const Booking = require('../models/Booking');
 const Trip = require('../models/Trip');
-const Destination = require('../models/Destination');
 const Payment = require('../models/Payment');
+const mongoose = require('mongoose');
 const AppError = require('../utils/AppError');
 const {
+  safeMirror,
+  syncBooking,
+  syncPayment,
+} = require('../services/sqlMirrorService');
+const sqlRead = require('../services/sqlReadService');
+const {
   assertObjectId,
-  parseDate,
   parsePositiveInteger,
 } = require('../utils/validation');
 
 const BOOKING_STATUSES = ['pending', 'confirmed', 'completed', 'cancelled'];
 const PAYMENT_METHODS = ['QRIS', 'Transfer Bank', 'Debit/Kredit'];
+const BANK_NAMES = ['BCA', 'Mandiri', 'BRI', 'BNI'];
 
 const populateBooking = (query) =>
-  query.populate('trip_id').populate('destination_id').populate('payment_id');
+  query.populate([
+    { path: 'trip_id' },
+    { path: 'destination_id' },
+    { path: 'payment_id' },
+  ]);
 
 const createBooking = async (req, res, next) => {
   try {
-    const { booking_type, trip_id, destination_id, qty, visit_date } = req.body;
-    if (!['trip', 'destination'].includes(booking_type)) {
-      return next(new AppError('booking_type harus trip atau destination', 400));
+    const { booking_type, trip_id, qty } = req.body;
+    if (booking_type !== 'trip') {
+      return next(new AppError('booking_type harus trip', 400));
+    }
+    if (!trip_id || qty === undefined) {
+      return next(
+        new AppError('booking_type, trip_id, dan qty wajib diisi', 400)
+      );
     }
 
     const quantity = parsePositiveInteger(qty, 'qty');
-    const visitDate = parseDate(visit_date, 'visit_date');
-    let item;
+    const sqlTrip = await sqlRead.getTripByMongoId(trip_id, { activeOnly: false });
+    if (sqlTrip) {
+      const booking = await sqlRead.createSqlBooking({
+        userId: String(req.user._id),
+        tripId: trip_id,
+        qty: quantity,
+      });
+      return res.status(201).json({ status: 'success', data: { booking } });
+    }
 
-    if (booking_type === 'trip') {
-      if (!trip_id || destination_id) {
-        return next(new AppError('Booking trip wajib memiliki trip_id saja', 400));
-      }
-      assertObjectId(trip_id, 'trip_id');
-      item = await Trip.findById(trip_id);
-      if (!item) return next(new AppError('Trip tidak ditemukan', 404));
+    assertObjectId(trip_id, 'trip_id');
+    const trip = await Trip.findById(trip_id);
+    if (!trip) return next(new AppError('Trip tidak ditemukan', 404));
+    if (trip.status !== 'active') {
+      return next(new AppError('Trip sedang tidak aktif dan tidak dapat dibooking', 400));
+    }
 
-      const booked = await Booking.aggregate([
-        {
-          $match: {
-            trip_id: item._id,
-            status: { $in: ['pending', 'confirmed'] },
-          },
+    const tripStartDate = trip.start_date || trip.departure_date;
+    const tripEndDate = trip.end_date || tripStartDate;
+    if (
+      !tripStartDate ||
+      !tripEndDate ||
+      Number.isNaN(new Date(tripStartDate).getTime()) ||
+      Number.isNaN(new Date(tripEndDate).getTime())
+    ) {
+      return next(new AppError('Trip belum memiliki jadwal yang valid', 400));
+    }
+
+    const booked = await Booking.aggregate([
+      {
+        $match: {
+          trip_id: trip._id,
+          status: { $in: ['pending', 'confirmed', 'completed'] },
         },
-        { $group: { _id: null, total: { $sum: '$qty' } } },
-      ]);
-      if (quantity > item.quota - (booked[0]?.total || 0)) {
-        return next(new AppError('Kuota trip tidak mencukupi', 400));
-      }
-    } else {
-      if (!destination_id || trip_id) {
-        return next(
-          new AppError('Booking destination wajib memiliki destination_id saja', 400)
-        );
-      }
-      assertObjectId(destination_id, 'destination_id');
-      item = await Destination.findById(destination_id);
-      if (!item) return next(new AppError('Destination tidak ditemukan', 404));
+      },
+      { $group: { _id: null, total: { $sum: '$qty' } } },
+    ]);
+    if (quantity > trip.quota - (booked[0]?.total || 0)) {
+      const remainingQuota = Math.max(trip.quota - (booked[0]?.total || 0), 0);
+      return next(
+        new AppError(`Kuota trip tidak mencukupi. Sisa kuota: ${remainingQuota}`, 400)
+      );
     }
 
     const booking = await Booking.create({
       user_id: req.user._id,
-      booking_type,
-      trip_id: booking_type === 'trip' ? item._id : null,
-      destination_id: booking_type === 'destination' ? item._id : null,
+      booking_type: 'trip',
+      trip_id: trip._id,
+      destination_id: null,
       qty: quantity,
-      visit_date: visitDate,
-      total_price: item.price * quantity,
+      visit_date: tripStartDate,
+      total_price: trip.price * quantity,
       status: 'pending',
     });
+    await safeMirror(`booking ${booking._id}`, () =>
+      syncBooking(booking, {
+        recordHistory: true,
+        changedBy: req.user._id,
+        notes: 'Booking dibuat',
+      })
+    );
     await populateBooking(booking);
 
     res.status(201).json({ status: 'success', data: { booking } });
@@ -77,6 +109,16 @@ const createBooking = async (req, res, next) => {
 
 const authorizePaymentBooking = async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      const booking = await sqlRead.getPendingSqlBookingForPayment(
+        req.params.id,
+        String(req.user._id)
+      );
+      if (!booking) return next(new AppError('Booking tidak ditemukan', 404));
+      req.sqlBooking = booking;
+      return next();
+    }
+
     assertObjectId(req.params.id, 'booking_id');
     const booking = await Booking.findOne({
       _id: req.params.id,
@@ -102,6 +144,24 @@ const uploadPayment = async (req, res, next) => {
     if (!PAYMENT_METHODS.includes(method)) {
       return next(new AppError('Metode payment tidak valid', 400));
     }
+    const bankName = method === 'Transfer Bank' ? req.body.bank_name : null;
+    if (method === 'Transfer Bank' && !BANK_NAMES.includes(bankName)) {
+      return next(new AppError('Bank transfer tidak valid', 400));
+    }
+    let cardLast4 = null;
+    if (method === 'Debit/Kredit') {
+      const cardNumber = String(req.body.card_number || '').replace(/\s+/g, '');
+      if (!/^\d{12,19}$/.test(cardNumber)) {
+        return next(new AppError('Nomor kartu harus berupa angka', 400));
+      }
+      if (!/^(0[1-9]|1[0-2])\/\d{2}$/.test(String(req.body.expiry || ''))) {
+        return next(new AppError('Expiry kartu harus format MM/YY', 400));
+      }
+      if (!/^\d{3,4}$/.test(String(req.body.cvv || ''))) {
+        return next(new AppError('CVV harus 3-4 digit', 400));
+      }
+      cardLast4 = cardNumber.slice(-4);
+    }
 
     const proofUrl =
       (req.file && `/uploads/payments/${req.file.filename}`) ||
@@ -111,16 +171,35 @@ const uploadPayment = async (req, res, next) => {
       return next(new AppError('Bukti pembayaran wajib diisi', 400));
     }
 
+    if (req.sqlBooking) {
+      const { payment, booking } = await sqlRead.createSqlPayment({
+        bookingId: req.params.id,
+        userId: String(req.user._id),
+        method,
+        proofUrl: proofUrl.trim(),
+        bankName,
+        cardLast4,
+      });
+      return res.status(201).json({
+        status: 'success',
+        message: 'Payment berhasil disubmit dan sedang diperiksa',
+        data: { payment, booking },
+      });
+    }
+
     const payment = await Payment.create({
       booking_id: req.booking._id,
       user_id: req.user._id,
       amount: req.booking.total_price,
       method,
       proof_url: proofUrl.trim(),
+      bank_name: bankName,
+      card_last4: cardLast4,
       status: 'checking',
     });
     req.booking.payment_id = payment._id;
     await req.booking.save();
+    await safeMirror(`payment ${payment._id}`, () => syncPayment(payment));
 
     res.status(201).json({
       status: 'success',
@@ -143,18 +222,13 @@ const getMyBookings = async (req, res, next) => {
       defaultValue: 10,
       max: 100,
     });
-    const filter = { user_id: req.user._id };
-    if (status) filter.status = status;
+    const { bookings, total } = await sqlRead.listBookings({
+      userId: String(req.user._id),
+      status,
+      page: pageNumber,
+      limit: limitNumber,
+    });
 
-    const [bookings, total] = await Promise.all([
-      populateBooking(
-        Booking.find(filter)
-          .sort({ createdAt: -1 })
-          .skip((pageNumber - 1) * limitNumber)
-          .limit(limitNumber)
-      ),
-      Booking.countDocuments(filter),
-    ]);
     res.status(200).json({
       status: 'success',
       results: bookings.length,
@@ -170,10 +244,14 @@ const getMyBookings = async (req, res, next) => {
 
 const getBookingById = async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      const booking = await sqlRead.getBookingByMongoId(req.params.id, String(req.user._id));
+      if (!booking) return next(new AppError('Booking tidak ditemukan', 404));
+      return res.status(200).json({ status: 'success', data: { booking } });
+    }
+
     assertObjectId(req.params.id, 'booking_id');
-    const booking = await populateBooking(
-      Booking.findOne({ _id: req.params.id, user_id: req.user._id })
-    );
+    const booking = await sqlRead.getBookingByMongoId(req.params.id, String(req.user._id));
     if (!booking) return next(new AppError('Booking tidak ditemukan', 404));
     res.status(200).json({ status: 'success', data: { booking } });
   } catch (err) {
@@ -183,6 +261,14 @@ const getBookingById = async (req, res, next) => {
 
 const cancelBooking = async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      const booking = await sqlRead.cancelSqlBooking({
+        bookingId: req.params.id,
+        userId: String(req.user._id),
+      });
+      return res.status(200).json({ status: 'success', data: { booking } });
+    }
+
     assertObjectId(req.params.id, 'booking_id');
     const booking = await Booking.findOne({
       _id: req.params.id,
@@ -192,8 +278,17 @@ const cancelBooking = async (req, res, next) => {
     if (booking.status !== 'pending') {
       return next(new AppError('Hanya booking pending yang dapat dibatalkan', 400));
     }
+    const previousStatus = booking.status;
     booking.status = 'cancelled';
     await booking.save();
+    await safeMirror(`booking ${booking._id}`, () =>
+      syncBooking(booking, {
+        previousStatus,
+        recordHistory: true,
+        changedBy: req.user._id,
+        notes: 'Booking dibatalkan oleh user',
+      })
+    );
     res.status(200).json({ status: 'success', data: { booking } });
   } catch (err) {
     next(err);
@@ -202,12 +297,7 @@ const cancelBooking = async (req, res, next) => {
 
 const getMyPayments = async (req, res, next) => {
   try {
-    const payments = await Payment.find({ user_id: req.user._id })
-      .populate({
-        path: 'booking_id',
-        populate: [{ path: 'trip_id' }, { path: 'destination_id' }],
-      })
-      .sort({ createdAt: -1 });
+    const payments = await sqlRead.listPayments(String(req.user._id));
     res.status(200).json({
       status: 'success',
       results: payments.length,

@@ -1,40 +1,36 @@
 const Destination = require('../models/Destination');
-const Trip = require('../models/Trip');
 const AppError = require('../utils/AppError');
+const sqlRead = require('../services/sqlReadService');
 const {
   assertObjectId,
   escapeRegex,
   parsePositiveInteger,
 } = require('../utils/validation');
+const CATALOG_SORTS = ['name_asc', 'price_asc', 'price_desc'];
+const CATALOG_CATEGORIES = ['all', 'domestic', 'international'];
 
 // GET /destinations - daftar destinasi dengan pencarian lokasi
 const getAllDestinations = async (req, res, next) => {
   try {
-    const { search, page = 1, limit = 20 } = req.query;
+    const { search, sort = 'name_asc', page = 1, limit = 20, category = 'all' } = req.query;
     const pageNumber = parsePositiveInteger(page, 'page', { defaultValue: 1 });
     const limitNumber = parsePositiveInteger(limit, 'limit', {
       defaultValue: 20,
       max: 100,
     });
-    const filter = {};
-
-    if (search) {
-      const searchRegex = { $regex: escapeRegex(search), $options: 'i' };
-      filter.$or = [
-        { city: searchRegex },
-        { province: searchRegex },
-        { country: searchRegex },
-      ];
+    if (!CATALOG_SORTS.includes(sort)) {
+      return next(new AppError('Pilihan sort tidak valid', 400));
     }
-
-    const skip = (pageNumber - 1) * limitNumber;
-    const [destinations, total] = await Promise.all([
-      Destination.find(filter)
-        .sort({ city: 1 })
-        .skip(skip)
-        .limit(limitNumber),
-      Destination.countDocuments(filter),
-    ]);
+    if (!CATALOG_CATEGORIES.includes(category)) {
+      return next(new AppError('Pilihan category tidak valid', 400));
+    }
+    const { destinations, total } = await sqlRead.listDestinations({
+      search,
+      sort,
+      page: pageNumber,
+      limit: limitNumber,
+      category,
+    });
 
     res.status(200).json({
       status: 'success',
@@ -52,19 +48,12 @@ const getAllDestinations = async (req, res, next) => {
 // GET /destinations/:id - detail destinasi dan trip aktifnya
 const getDestinationById = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'destination_id');
-
-    const destination = await Destination.findById(req.params.id);
+    const destination = await sqlRead.getDestinationByMongoId(req.params.id);
     if (!destination) {
       return next(new AppError('Destinasi tidak ditemukan', 404));
     }
 
-    const trips = await Trip.find({
-      'destinations.destination_id': destination._id,
-      status: 'active',
-    })
-      .sort({ start_date: 1, departure_date: 1 })
-      .select('title image_url price quota start_date end_date duration_days departure_date facilities');
+    const trips = await sqlRead.listTripsForDestination(req.params.id);
 
     res.status(200).json({
       status: 'success',

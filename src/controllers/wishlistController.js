@@ -1,8 +1,14 @@
 const Wishlist = require('../models/Wishlist');
 const Trip = require('../models/Trip');
 const Destination = require('../models/Destination');
+const mongoose = require('mongoose');
 const AppError = require('../utils/AppError');
 const { assertObjectId } = require('../utils/validation');
+const {
+  deleteWishlist: deleteWishlistMirror,
+  syncWishlist,
+} = require('../services/sqlMirrorService');
+const sqlRead = require('../services/sqlReadService');
 
 const addWishlist = async (req, res, next) => {
   try {
@@ -13,29 +19,57 @@ const addWishlist = async (req, res, next) => {
 
     const field = trip_id ? 'trip_id' : 'destination_id';
     const value = trip_id || destination_id;
-    assertObjectId(value, field);
-    const Model = trip_id ? Trip : Destination;
-    if (!(await Model.exists({ _id: value }))) {
-      return next(new AppError(`${trip_id ? 'Trip' : 'Destination'} tidak ditemukan`, 404));
+    const userId = String(req.user._id);
+    let sqlItem = null;
+
+    if (trip_id) {
+      sqlItem = await sqlRead.getTripByMongoId(value, { activeOnly: false });
+      if (!sqlItem && !(mongoose.isValidObjectId(value) && await Trip.exists({ _id: value }))) {
+        return next(new AppError('Trip tidak ditemukan', 404));
+      }
+    }
+    if (destination_id) {
+      sqlItem = await sqlRead.getDestinationByMongoId(value);
+      if (!sqlItem && !(mongoose.isValidObjectId(value) && await Destination.exists({ _id: value }))) {
+        return next(new AppError('Destination tidak ditemukan', 404));
+      }
+    }
+
+    if (sqlItem) {
+      const wishlist = await sqlRead.createSqlWishlist({
+        userId,
+        tripId: trip_id,
+        destinationId: destination_id,
+      });
+      return res.status(201).json({ status: 'success', data: { wishlist } });
+    }
+
+    const existing = await Wishlist.findOne({
+      user_id: userId,
+      [field]: value,
+    });
+    if (existing) {
+      await syncWishlist(existing);
+      return res.status(200).json({ status: 'success', data: { wishlist: existing } });
     }
 
     const wishlist = await Wishlist.create({
-      user_id: req.user._id,
+      user_id: userId,
       [field]: value,
     });
-    await wishlist.populate(['trip_id', 'destination_id']);
+    await syncWishlist(wishlist);
     res.status(201).json({ status: 'success', data: { wishlist } });
   } catch (err) {
+    if (err.code === 11000) {
+      return next(new AppError('Item sudah ada di wishlist', 409));
+    }
     next(err);
   }
 };
 
 const getMyWishlist = async (req, res, next) => {
   try {
-    const wishlist = await Wishlist.find({ user_id: req.user._id })
-      .populate('trip_id')
-      .populate('destination_id')
-      .sort({ created_at: -1 });
+    const wishlist = await sqlRead.listWishlist(String(req.user._id));
     res.status(200).json({
       status: 'success',
       results: wishlist.length,
@@ -48,12 +82,23 @@ const getMyWishlist = async (req, res, next) => {
 
 const deleteWishlist = async (req, res, next) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      const deleted = await sqlRead.deleteSqlWishlist({
+        wishlistId: req.params.id,
+        userId: String(req.user._id),
+      });
+      if (!deleted) return next(new AppError('Wishlist tidak ditemukan', 404));
+      return res.status(204).send();
+    }
+
     assertObjectId(req.params.id, 'wishlist_id');
-    const wishlist = await Wishlist.findOneAndDelete({
+    const wishlist = await Wishlist.findOne({
       _id: req.params.id,
-      user_id: req.user._id,
+      user_id: String(req.user._id),
     });
     if (!wishlist) return next(new AppError('Wishlist tidak ditemukan', 404));
+    await deleteWishlistMirror(wishlist);
+    await wishlist.deleteOne();
     res.status(204).send();
   } catch (err) {
     next(err);

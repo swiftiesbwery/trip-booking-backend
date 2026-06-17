@@ -1,7 +1,10 @@
 const Trip = require('../models/Trip');
 const Destination = require('../models/Destination');
 const Review = require('../models/Review');
+const mongoose = require('mongoose');
 const AppError = require('../utils/AppError');
+const { safeMirror, syncTrip } = require('../services/sqlMirrorService');
+const sqlRead = require('../services/sqlReadService');
 const {
   assertObjectId,
   escapeRegex,
@@ -12,6 +15,8 @@ const {
 const populateDestinations = {
   path: 'destinations.destination_id',
 };
+const CATALOG_SORTS = ['name_asc', 'price_asc', 'price_desc'];
+const CATALOG_CATEGORIES = ['all', 'domestic', 'international'];
 
 const normalizeAndValidateDestinations = async (destinations) => {
   if (!Array.isArray(destinations) || destinations.length === 0) {
@@ -67,6 +72,7 @@ const createTrip = async (req, res, next) => {
       destinations,
       created_by: req.user._id,
     });
+    await safeMirror(`trip ${trip._id}`, () => syncTrip(trip));
     await trip.populate(populateDestinations);
 
     res.status(201).json({
@@ -85,6 +91,9 @@ const updateTrip = async (req, res, next) => {
 
     const allowedFields = [
       'title',
+      'country',
+      'city',
+      'category',
       'description',
       'destinations',
       'price',
@@ -114,6 +123,7 @@ const updateTrip = async (req, res, next) => {
 
     Object.assign(trip, updates);
     await trip.save();
+    await safeMirror(`trip ${trip._id}`, () => syncTrip(trip));
     await trip.populate(populateDestinations);
 
     res.status(200).json({
@@ -133,13 +143,14 @@ const getAllTrips = async (req, res, next) => {
       destination,
       destination_id,
       city,
+      category = 'all',
       minPrice,
       maxPrice,
       minDays,
       maxDays,
       startDate,
       endDate,
-      sort = 'start_date',
+      sort = 'name_asc',
       page = 1,
       limit = 9,
     } = req.query;
@@ -149,110 +160,86 @@ const getAllTrips = async (req, res, next) => {
       defaultValue: 9,
       max: 100,
     });
-    const filter = {
-      status: 'active',
-    };
-
-    if (search) {
-      filter.title = { $regex: escapeRegex(search), $options: 'i' };
+    if (!CATALOG_SORTS.includes(sort)) {
+      return next(new AppError('Pilihan sort tidak valid', 400));
+    }
+    if (!CATALOG_CATEGORIES.includes(category)) {
+      return next(new AppError('Pilihan category tidak valid', 400));
     }
 
-    if (destination_id) {
-      assertObjectId(destination_id, 'destination_id');
-      filter['destinations.destination_id'] = destination_id;
-    } else if (destination || city) {
-      const locationRegex = {
-        $regex: escapeRegex(destination || city),
-        $options: 'i',
-      };
-      const matchingDestinations = await Destination.find({
-        $or: [
-          { city: locationRegex },
-          { province: locationRegex },
-          { country: locationRegex },
-        ],
-      }).select('_id');
-      filter['destinations.destination_id'] = {
-        $in: matchingDestinations.map((item) => item._id),
-      };
-    }
-
+    let parsedMinPrice;
+    let parsedMaxPrice;
     if (minPrice !== undefined || maxPrice !== undefined) {
-      filter.price = {};
       if (minPrice !== undefined) {
-        filter.price.$gte = parseNonNegativeNumber(minPrice, 'minPrice');
+        parsedMinPrice = parseNonNegativeNumber(minPrice, 'minPrice');
       }
       if (maxPrice !== undefined) {
-        filter.price.$lte = parseNonNegativeNumber(maxPrice, 'maxPrice');
+        parsedMaxPrice = parseNonNegativeNumber(maxPrice, 'maxPrice');
       }
-      if (filter.price.$gte > filter.price.$lte) {
+      if (parsedMinPrice > parsedMaxPrice) {
         return next(new AppError('minPrice tidak boleh lebih besar dari maxPrice', 400));
       }
     }
 
-    if (minDays !== undefined || maxDays !== undefined) {
-      filter.duration_days = {};
-      if (minDays !== undefined) {
-        filter.duration_days.$gte = parsePositiveInteger(minDays, 'minDays');
-      }
-      if (maxDays !== undefined) {
-        filter.duration_days.$lte = parsePositiveInteger(maxDays, 'maxDays');
-      }
-      if (filter.duration_days.$gte > filter.duration_days.$lte) {
-        return next(new AppError('minDays tidak boleh lebih besar dari maxDays', 400));
-      }
-    }
-
+    let parsedStartDate;
+    let parsedEndDate;
     if (startDate !== undefined || endDate !== undefined) {
-      filter.start_date = {};
       if (startDate !== undefined) {
         const parsed = new Date(startDate);
         if (Number.isNaN(parsed.getTime())) {
           return next(new AppError('startDate tidak valid', 400));
         }
-        filter.start_date.$gte = parsed;
+        parsedStartDate = startDate;
       }
       if (endDate !== undefined) {
         const parsed = new Date(endDate);
         if (Number.isNaN(parsed.getTime())) {
           return next(new AppError('endDate tidak valid', 400));
         }
-        filter.start_date.$lte = parsed;
+        parsedEndDate = endDate;
       }
     }
 
-    const sortOptions = {
-      departure_date: { departure_date: 1 },
-      start_date: { start_date: 1 },
-      price_asc: { price: 1 },
-      price_desc: { price: -1 },
-      newest: { createdAt: -1 },
-    };
-    const sortQuery = sortOptions[sort];
-    if (!sortQuery) {
-      return next(new AppError('Pilihan sort tidak valid', 400));
-    }
+    const { trips, total } = await sqlRead.listTrips({
+      search,
+      destination,
+      destination_id,
+      city,
+      category,
+      minPrice: parsedMinPrice,
+      maxPrice: parsedMaxPrice,
+      startDate: parsedStartDate,
+      endDate: parsedEndDate,
+      sort,
+      page: pageNumber,
+      limit: limitNumber,
+    });
 
-    const skip = (pageNumber - 1) * limitNumber;
-    const [trips, total] = await Promise.all([
-      Trip.find(filter)
-        .populate(populateDestinations)
-        .sort(sortQuery)
-        .skip(skip)
-        .limit(limitNumber)
-        .select(
-          'title image_url description destinations price quota start_date end_date duration_days departure_date facilities'
-        ),
-      Trip.countDocuments(filter),
-    ]);
+    let filteredTrips = trips;
+    if (minDays !== undefined || maxDays !== undefined) {
+      const min = minDays !== undefined ? parsePositiveInteger(minDays, 'minDays') : null;
+      const max = maxDays !== undefined ? parsePositiveInteger(maxDays, 'maxDays') : null;
+      if (min !== null && max !== null && min > max) {
+        return next(new AppError('minDays tidak boleh lebih besar dari maxDays', 400));
+      }
+      filteredTrips = trips.filter((trip) => {
+        const duration =
+          trip.duration_days ||
+          Math.max(
+            1,
+            Math.round((new Date(trip.end_date) - new Date(trip.start_date)) / 86400000) + 1
+          );
+        return (min === null || duration >= min) && (max === null || duration <= max);
+      });
+    }
 
     res.status(200).json({
       status: 'success',
-      results: trips.length,
+      results: filteredTrips.length,
       total,
       totalPages: Math.ceil(total / limitNumber),
       currentPage: pageNumber,
-      data: { trips },
+      data: { trips: filteredTrips },
     });
   } catch (err) {
     next(err);
@@ -262,29 +249,24 @@ const getAllTrips = async (req, res, next) => {
 // GET /trips/:id - detail trip lengkap dan ringkasan rating
 const getTripById = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'trip_id');
-
-    const trip = await Trip.findOne({
-      _id: req.params.id,
-      status: 'active',
-    })
-      .populate('created_by', 'name')
-      .populate(populateDestinations);
+    const trip = await sqlRead.getTripByMongoId(req.params.id);
 
     if (!trip) {
       return next(new AppError('Trip tidak ditemukan', 404));
     }
 
-    const ratingData = await Review.aggregate([
-      { $match: { trip_id: trip._id } },
-      {
-        $group: {
-          _id: '$trip_id',
-          avgRating: { $avg: '$rating' },
-          totalReviews: { $sum: 1 },
-        },
-      },
-    ]);
+    const ratingData = mongoose.isValidObjectId(req.params.id)
+      ? await Review.aggregate([
+          { $match: { trip_id: new mongoose.Types.ObjectId(req.params.id) } },
+          {
+            $group: {
+              _id: '$trip_id',
+              avgRating: { $avg: '$rating' },
+              totalReviews: { $sum: 1 },
+            },
+          },
+        ])
+      : [];
 
     const rating = ratingData.length
       ? {
@@ -305,15 +287,16 @@ const getTripById = async (req, res, next) => {
 // GET /trips/:id/reviews - semua review untuk satu trip
 const getTripReviews = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'trip_id');
-    const tripExists = await Trip.exists({ _id: req.params.id, status: 'active' });
-    if (!tripExists) {
+    const trip = await sqlRead.getTripByMongoId(req.params.id);
+    if (!trip) {
       return next(new AppError('Trip tidak ditemukan', 404));
     }
 
-    const reviews = await Review.find({ trip_id: req.params.id })
-      .populate('user_id', 'name')
-      .sort({ createdAt: -1 });
+    const reviews = mongoose.isValidObjectId(req.params.id)
+      ? await Review.find({ trip_id: req.params.id })
+          .populate('user_id', 'name')
+          .sort({ createdAt: -1 })
+      : [];
 
     res.status(200).json({
       status: 'success',

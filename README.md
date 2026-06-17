@@ -7,6 +7,7 @@ Mongoose, JWT, bcryptjs, dan Multer.
 
 ```bash
 npm install
+npm run seed:admin
 npm start
 ```
 
@@ -18,6 +19,34 @@ MONGODB_URI=mongodb://localhost:27017/trip_booking
 JWT_SECRET=ganti_dengan_secret_yang_aman
 JWT_EXPIRES_IN=7d
 ```
+
+## Login Admin Default
+
+Admin dan user login melalui endpoint serta halaman login yang sama:
+
+```text
+Frontend: http://localhost:5173/login
+API: POST http://localhost:3000/api/auth/login
+```
+
+Buat atau reset akun admin default dengan:
+
+```bash
+npm run seed:admin
+```
+
+Kredensial admin default:
+
+```text
+Email: admin@gmail.com
+Password: admin123
+Role: admin
+```
+
+Script seed aman dijalankan berulang kali. Password diproses melalui model
+`User`, sehingga tersimpan sebagai bcrypt hash. Setelah login, frontend
+mengarahkan role `admin` ke `/admin`, sedangkan role `user` ke halaman explore
+`/`.
 
 Endpoint privat memakai header:
 
@@ -47,12 +76,14 @@ Authorization: Bearer <token>
 | GET | `/api/wishlists` | Wishlist milik user |
 | POST | `/api/wishlists` | Tambah wishlist |
 | DELETE | `/api/wishlists/:id` | Hapus wishlist milik user |
-| POST | `/api/bookings` | Buat booking trip/destination |
+| POST | `/api/bookings` | Buat booking trip |
 | GET | `/api/bookings/my` | Riwayat booking, dapat difilter status |
 | GET | `/api/bookings/:id` | Detail booking milik user |
 | PATCH | `/api/bookings/:id/cancel` | Cancel booking pending |
 | POST | `/api/bookings/:id/payment` | Submit payment dan bukti |
 | GET | `/api/payments/my` | Payment milik user |
+| POST | `/api/reviews` | Review booking trip confirmed/completed |
+| GET | `/api/reviews/my` | Review milik user |
 
 Filter explore:
 
@@ -83,6 +114,7 @@ Semua endpoint berikut hanya dapat diakses user dengan role `admin`.
 | GET | `/api/admin/users` | Semua user |
 | GET | `/api/admin/users/:id` | Detail user |
 | PATCH | `/api/admin/users/:id/verification` | Update `is_verified` |
+| GET | `/api/admin/reviews` | Monitoring seluruh review |
 
 Filter booking admin:
 
@@ -160,21 +192,12 @@ Booking trip:
 {
   "booking_type": "trip",
   "trip_id": "<trip_id>",
-  "qty": 2,
-  "visit_date": "2026-08-10"
+  "qty": 2
 }
 ```
 
-Booking destination:
-
-```json
-{
-  "booking_type": "destination",
-  "destination_id": "<destination_id>",
-  "qty": 2,
-  "visit_date": "2026-08-10"
-}
-```
+Tanggal booking otomatis menggunakan `start_date` trip dan tidak diterima dari
+request user.
 
 Submit payment:
 

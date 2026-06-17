@@ -31,6 +31,18 @@ const paymentSchema = new mongoose.Schema(
       type: String,
     },
 
+    bank_name: {
+      type: String,
+      enum: ['BCA', 'Mandiri', 'BRI', 'BNI', null],
+      default: null,
+    },
+
+    card_last4: {
+      type: String,
+      match: [/^\d{4}$/, 'card_last4 harus 4 digit'],
+      default: null,
+    },
+
     status: {
       type: String,
       enum: ['pending', 'checking', 'verified'],

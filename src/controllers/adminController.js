@@ -4,7 +4,19 @@ const Payment = require('../models/Payment');
 const Trip = require('../models/Trip');
 const User = require('../models/User');
 const Wishlist = require('../models/Wishlist');
+const Review = require('../models/Review');
 const AppError = require('../utils/AppError');
+const sqlRead = require('../services/sqlReadService');
+const {
+  deleteDestination: deleteDestinationMirror,
+  deleteTrip: deleteTripMirror,
+  safeMirror,
+  syncBooking,
+  syncDestination,
+  syncPayment,
+  syncTrip,
+  syncUser,
+} = require('../services/sqlMirrorService');
 const {
   assertObjectId,
   parsePositiveInteger,
@@ -13,8 +25,13 @@ const {
 
 const BOOKING_STATUSES = ['pending', 'confirmed', 'completed', 'cancelled'];
 const PAYMENT_STATUSES = ['pending', 'checking', 'verified'];
+const CATALOG_SORTS = ['name_asc', 'price_asc', 'price_desc'];
+const CATALOG_CATEGORIES = ['all', 'domestic', 'international'];
 const tripFields = [
   'title',
+  'country',
+  'city',
+  'category',
   'image_url',
   'price',
   'quota',
@@ -28,7 +45,7 @@ const tripFields = [
   'facilities',
   'status',
 ];
-const destinationFields = ['city', 'province', 'country', 'image_url', 'price'];
+const destinationFields = ['city', 'province', 'country', 'category', 'image_url', 'imageUrl', 'price'];
 
 const paginated = async (Model, filter, req, populate = []) => {
   const page = parsePositiveInteger(req.query.page, 'page', { defaultValue: 1 });
@@ -66,17 +83,23 @@ const normalizeDestinations = async (destinations = []) => {
 
 const listTrips = async (req, res, next) => {
   try {
-    const result = await paginated(Trip, {}, req, ['destinations.destination_id', 'created_by']);
+    const page = parsePositiveInteger(req.query.page, 'page', { defaultValue: 1 });
+    const limit = parsePositiveInteger(req.query.limit, 'limit', {
+      defaultValue: 20,
+      max: 100,
+    });
+    const sort = req.query.sort || 'name_asc';
+    if (!CATALOG_SORTS.includes(sort)) return next(new AppError('Pilihan sort tidak valid', 400));
+    const category = req.query.category || 'all';
+    if (!CATALOG_CATEGORIES.includes(category)) return next(new AppError('Pilihan category tidak valid', 400));
+    const result = await sqlRead.listAdminTrips({ page, limit, sort, category });
     res.json({ status: 'success', ...result, data: { trips: result.items } });
   } catch (err) { next(err); }
 };
 
 const getTrip = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'trip_id');
-    const trip = await Trip.findById(req.params.id)
-      .populate('destinations.destination_id')
-      .populate('created_by', 'name email');
+    const trip = await sqlRead.getAdminTrip(req.params.id);
     if (!trip) return next(new AppError('Trip tidak ditemukan', 404));
     res.json({ status: 'success', data: { trip } });
   } catch (err) { next(err); }
@@ -85,45 +108,30 @@ const getTrip = async (req, res, next) => {
 const createTrip = async (req, res, next) => {
   try {
     const data = pickFields(req.body, tripFields);
-    data.destinations = await normalizeDestinations(req.body.destinations || []);
-    data.created_by = req.user._id;
-    const trip = await Trip.create(data);
-    await trip.populate('destinations.destination_id');
+    data.destinations = req.body.destinations || [];
+    const trip = await sqlRead.createAdminTrip({ data, createdBy: req.user._id });
     res.status(201).json({ status: 'success', data: { trip } });
   } catch (err) { next(err); }
 };
 
 const updateTrip = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'trip_id');
     const data = pickFields(req.body, tripFields);
-    if (data.destinations !== undefined) data.destinations = await normalizeDestinations(data.destinations);
-    const trip = await Trip.findByIdAndUpdate(req.params.id, data, {
-      new: true,
-      runValidators: true,
-    }).populate('destinations.destination_id');
-    if (!trip) return next(new AppError('Trip tidak ditemukan', 404));
+    const trip = await sqlRead.updateAdminTrip({ id: req.params.id, data });
     res.json({ status: 'success', data: { trip } });
   } catch (err) { next(err); }
 };
 
 const deleteTrip = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'trip_id');
-    if (await Booking.exists({ trip_id: req.params.id })) {
-      return next(new AppError('Trip yang sudah memiliki booking tidak dapat dihapus', 400));
-    }
-    const trip = await Trip.findByIdAndDelete(req.params.id);
-    if (!trip) return next(new AppError('Trip tidak ditemukan', 404));
-    await Wishlist.deleteMany({ trip_id: trip._id });
+    await sqlRead.deleteAdminTrip(req.params.id);
     res.status(204).send();
   } catch (err) { next(err); }
 };
 
 const listTripDestinations = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'trip_id');
-    const trip = await Trip.findById(req.params.id).populate('destinations.destination_id');
+    const trip = await sqlRead.getAdminTrip(req.params.id);
     if (!trip) return next(new AppError('Trip tidak ditemukan', 404));
     res.json({ status: 'success', data: { destinations: trip.destinations } });
   } catch (err) { next(err); }
@@ -131,60 +139,67 @@ const listTripDestinations = async (req, res, next) => {
 
 const addTripDestination = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'trip_id');
-    assertObjectId(req.body.destination_id, 'destination_id');
-    if (!(await Destination.exists({ _id: req.body.destination_id }))) {
-      return next(new AppError('Destination tidak ditemukan', 404));
-    }
-    const trip = await Trip.findById(req.params.id);
+    const trip = await sqlRead.getAdminTrip(req.params.id);
     if (!trip) return next(new AppError('Trip tidak ditemukan', 404));
-    if (trip.destinations.some((item) => String(item.destination_id) === req.body.destination_id)) {
+    if ((trip.destinations || []).some((item) => String(item.destination_id?._id) === String(req.body.destination_id))) {
       return next(new AppError('Destination sudah terhubung dengan trip', 400));
     }
-    trip.destinations.push({
-      destination_id: req.body.destination_id,
-      visit_order: trip.destinations.length + 1,
-      notes: req.body.notes,
+    const destinations = [
+      ...(trip.destinations || []).map((item) => ({
+        destination_id: item.destination_id?._id || item.destination_id,
+        notes: item.notes || '',
+      })),
+      { destination_id: req.body.destination_id, notes: req.body.notes || '' },
+    ].map((item, index) => ({ ...item, visit_order: index + 1 }));
+    const updated = await sqlRead.updateAdminTrip({
+      id: req.params.id,
+      data: { destinations },
     });
-    await trip.save();
-    await trip.populate('destinations.destination_id');
-    res.status(201).json({ status: 'success', data: { destinations: trip.destinations } });
+    res.status(201).json({ status: 'success', data: { destinations: updated.destinations } });
   } catch (err) { next(err); }
 };
 
 const removeTripDestination = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'trip_id');
-    assertObjectId(req.params.destinationId, 'destination_id');
-    const trip = await Trip.findById(req.params.id);
+    const trip = await sqlRead.getAdminTrip(req.params.id);
     if (!trip) return next(new AppError('Trip tidak ditemukan', 404));
-    const filtered = trip.destinations.filter(
-      (item) => String(item.destination_id) !== req.params.destinationId
+    const filtered = (trip.destinations || []).filter(
+      (item) => String(item.destination_id?._id || item.destination_id) !== String(req.params.destinationId)
     );
-    if (filtered.length === trip.destinations.length) {
+    if (filtered.length === (trip.destinations || []).length) {
       return next(new AppError('Relasi destination tidak ditemukan', 404));
     }
-    trip.destinations = filtered.map((item, index) => ({
-      destination_id: item.destination_id,
-      visit_order: index + 1,
-      notes: item.notes,
-    }));
-    await trip.save();
+    await sqlRead.updateAdminTrip({
+      id: req.params.id,
+      data: { destinations: filtered.map((item, index) => ({
+        destination_id: item.destination_id?._id || item.destination_id,
+        visit_order: index + 1,
+        notes: item.notes || '',
+      })) },
+    });
     res.status(204).send();
   } catch (err) { next(err); }
 };
 
 const listDestinations = async (req, res, next) => {
   try {
-    const result = await paginated(Destination, {}, req);
+    const page = parsePositiveInteger(req.query.page, 'page', { defaultValue: 1 });
+    const limit = parsePositiveInteger(req.query.limit, 'limit', {
+      defaultValue: 20,
+      max: 100,
+    });
+    const sort = req.query.sort || 'name_asc';
+    if (!CATALOG_SORTS.includes(sort)) return next(new AppError('Pilihan sort tidak valid', 400));
+    const category = req.query.category || 'all';
+    if (!CATALOG_CATEGORIES.includes(category)) return next(new AppError('Pilihan category tidak valid', 400));
+    const result = await sqlRead.listAdminDestinations({ page, limit, sort, category });
     res.json({ status: 'success', ...result, data: { destinations: result.items } });
   } catch (err) { next(err); }
 };
 
 const getDestination = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'destination_id');
-    const destination = await Destination.findById(req.params.id);
+    const destination = await sqlRead.getAdminDestination(req.params.id);
     if (!destination) return next(new AppError('Destination tidak ditemukan', 404));
     res.json({ status: 'success', data: { destination } });
   } catch (err) { next(err); }
@@ -192,36 +207,27 @@ const getDestination = async (req, res, next) => {
 
 const createDestination = async (req, res, next) => {
   try {
-    const destination = await Destination.create(pickFields(req.body, destinationFields));
+    const destination = await sqlRead.createAdminDestination(
+      pickFields(req.body, destinationFields)
+    );
     res.status(201).json({ status: 'success', data: { destination } });
   } catch (err) { next(err); }
 };
 
 const updateDestination = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'destination_id');
-    const destination = await Destination.findByIdAndUpdate(
-      req.params.id,
-      pickFields(req.body, destinationFields),
-      { new: true, runValidators: true }
-    );
-    if (!destination) return next(new AppError('Destination tidak ditemukan', 404));
+    console.log('Destination update request:', req.params.id, req.body);
+    const destination = await sqlRead.updateAdminDestination({
+      id: req.params.id,
+      data: pickFields(req.body, destinationFields),
+    });
     res.json({ status: 'success', data: { destination } });
   } catch (err) { next(err); }
 };
 
 const deleteDestination = async (req, res, next) => {
   try {
-    assertObjectId(req.params.id, 'destination_id');
-    if (await Trip.exists({ 'destinations.destination_id': req.params.id })) {
-      return next(new AppError('Destination yang terhubung dengan trip tidak dapat dihapus', 400));
-    }
-    if (await Booking.exists({ destination_id: req.params.id })) {
-      return next(new AppError('Destination yang memiliki booking tidak dapat dihapus', 400));
-    }
-    const destination = await Destination.findByIdAndDelete(req.params.id);
-    if (!destination) return next(new AppError('Destination tidak ditemukan', 404));
-    await Wishlist.deleteMany({ destination_id: destination._id });
+    await sqlRead.deleteAdminDestination(req.params.id);
     res.status(204).send();
   } catch (err) { next(err); }
 };
@@ -262,24 +268,36 @@ const updateBookingStatus = async (req, res, next) => {
   try {
     if (!BOOKING_STATUSES.includes(req.body.status)) return next(new AppError('Status booking tidak valid', 400));
     assertObjectId(req.params.id, 'booking_id');
-    const booking = await Booking.findByIdAndUpdate(
-      req.params.id,
-      { status: req.body.status },
-      { new: true, runValidators: true }
-    );
+    const booking = await Booking.findById(req.params.id);
     if (!booking) return next(new AppError('Booking tidak ditemukan', 404));
+    const previousStatus = booking.status;
+    booking.status = req.body.status;
+    await booking.save();
+    await safeMirror(`booking ${booking._id}`, () =>
+      syncBooking(booking, {
+        previousStatus,
+        recordHistory: previousStatus !== booking.status,
+        changedBy: req.user._id,
+        notes: 'Status booking diperbarui oleh admin',
+      })
+    );
     res.json({ status: 'success', data: { booking } });
   } catch (err) { next(err); }
 };
 
 const listPayments = async (req, res, next) => {
   try {
-    const filter = {};
+    const page = parsePositiveInteger(req.query.page, 'page', { defaultValue: 1 });
+    const limit = parsePositiveInteger(req.query.limit, 'limit', {
+      defaultValue: 20,
+      max: 100,
+    });
+    let status;
     if (req.query.status) {
       if (!PAYMENT_STATUSES.includes(req.query.status)) return next(new AppError('Status payment tidak valid', 400));
-      filter.status = req.query.status;
+      status = req.query.status;
     }
-    const result = await paginated(Payment, filter, req, ['user_id', 'booking_id']);
+    const result = await sqlRead.listAdminPayments({ status, page, limit });
     res.json({ status: 'success', ...result, data: { payments: result.items } });
   } catch (err) { next(err); }
 };
@@ -296,13 +314,36 @@ const getPayment = async (req, res, next) => {
 const updatePaymentStatus = async (req, res, next) => {
   try {
     if (!PAYMENT_STATUSES.includes(req.body.status)) return next(new AppError('Status payment tidak valid', 400));
+    const sqlPayment = await sqlRead.updateAdminPaymentStatus({
+      paymentId: req.params.id,
+      status: req.body.status,
+      changedBy: req.user._id,
+    });
+    if (sqlPayment) {
+      return res.json({ status: 'success', data: { payment: sqlPayment } });
+    }
+
     assertObjectId(req.params.id, 'payment_id');
     const payment = await Payment.findById(req.params.id);
     if (!payment) return next(new AppError('Payment tidak ditemukan', 404));
     payment.status = req.body.status;
     await payment.save();
+    await safeMirror(`payment ${payment._id}`, () => syncPayment(payment));
     if (payment.status === 'verified') {
-      await Booking.findByIdAndUpdate(payment.booking_id, { status: 'confirmed' });
+      const booking = await Booking.findById(payment.booking_id);
+      if (booking) {
+        const previousStatus = booking.status;
+        booking.status = 'confirmed';
+        await booking.save();
+        await safeMirror(`booking ${booking._id}`, () =>
+          syncBooking(booking, {
+            previousStatus,
+            recordHistory: previousStatus !== booking.status,
+            changedBy: req.user._id,
+            notes: 'Booking dikonfirmasi setelah payment diverifikasi',
+          })
+        );
+      }
     }
     res.json({ status: 'success', data: { payment } });
   } catch (err) { next(err); }
@@ -337,7 +378,15 @@ const updateUserVerification = async (req, res, next) => {
       { new: true, runValidators: true }
     );
     if (!user) return next(new AppError('User tidak ditemukan', 404));
+    await safeMirror(`user ${user._id}`, () => syncUser(user));
     res.json({ status: 'success', data: { user } });
+  } catch (err) { next(err); }
+};
+
+const listReviews = async (req, res, next) => {
+  try {
+    const result = await paginated(Review, {}, req, ['user_id', 'trip_id', 'booking_id']);
+    res.json({ status: 'success', ...result, data: { reviews: result.items } });
   } catch (err) { next(err); }
 };
 
@@ -346,5 +395,5 @@ module.exports = {
   getBooking, getDestination, getPayment, getTrip, getUser, listBookings,
   listDestinations, listPayments, listTripDestinations, listTrips, listUsers,
   removeTripDestination, updateBookingStatus, updateDestination, updatePaymentStatus,
-  updateTrip, updateUserVerification,
+  updateTrip, updateUserVerification, listReviews,
 };
