@@ -20,12 +20,12 @@ const bookingSchema = new mongoose.Schema(
     booking_type: {
       type: String,
       enum: ['trip', 'destination'],
-      required: [true, 'booking_type wajib diisi'],
+      required: [true, 'booking_type is required'],
     },
     qty: {
       type: Number,
-      required: [true, 'qty wajib diisi'],
-      min: [1, 'qty minimal 1'],
+      required: [true, 'qty is required'],
+      min: [1, 'qty must be at least 1'],
     },
     visit_date: {
       type: Date,
@@ -44,7 +44,7 @@ const bookingSchema = new mongoose.Schema(
     total_price: {
       type: Number,
       required: true,
-      min: [0, 'total_price tidak boleh negatif'],
+      min: [0, 'total_price cannot be negative'],
     },
   },
   { timestamps: true }
@@ -57,7 +57,7 @@ bookingSchema.pre('validate', function (next) {
   if (!validTrip && !validDestination) {
     this.invalidate(
       'booking_type',
-      'Booking harus memiliki item yang sesuai dengan booking_type'
+      'Booking must include an item that matches booking_type'
     );
   }
   next();

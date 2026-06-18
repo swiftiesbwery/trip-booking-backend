@@ -15,26 +15,25 @@ const protect = async (req, res, next) => {
 
     const token = authHeader.split(' ')[1];
     if (!token) {
-      return next(new AppError('Token tidak ditemukan', 401));
+      return next(new AppError('Token not found', 401));
     }
 
     // Verifikasi token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Cek user masih ada. Token lama memakai ObjectId Mongo, data SQL-only
-    // memakai public id dari kolom users.mongo_id.
-    const user = mongoose.isValidObjectId(decoded.id)
-      ? await User.findById(decoded.id)
-      : await sqlRead.getUserByMongoId(decoded.id);
+    // SQL adalah source of truth untuk auth. Fallback Mongo hanya untuk token lama.
+    const user =
+      (await sqlRead.getUserByMongoId(decoded.id)) ||
+      (mongoose.isValidObjectId(decoded.id) ? await User.findById(decoded.id) : null);
     if (!user) {
-      return next(new AppError('User tidak ditemukan', 401));
+      return next(new AppError('User not found', 401));
     }
 
     req.user = (await sqlRead.getUserByMongoId(String(user._id))) || user;
     next();
   } catch (err) {
     if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-      return next(new AppError('Token tidak valid atau sudah expired', 401));
+      return next(new AppError('Token is invalid or expired', 401));
     }
     return next(err);
   }

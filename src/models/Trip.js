@@ -14,15 +14,15 @@ const tripDestinationSchema = new mongoose.Schema(
     destination_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Destination',
-      required: [true, 'destination_id wajib diisi'],
+      required: [true, 'destination_id is required'],
     },
     visit_order: {
       type: Number,
-      required: [true, 'visit_order wajib diisi'],
-      min: [1, 'visit_order minimal 1'],
+      required: [true, 'visit_order is required'],
+      min: [1, 'visit_order must be at least 1'],
       validate: {
         validator: Number.isInteger,
-        message: 'visit_order harus berupa angka bulat',
+        message: 'visit_order must be an integer',
       },
     },
     notes: {
@@ -37,7 +37,7 @@ const tripSchema = new mongoose.Schema(
   {
     title: {
       type: String,
-      required: [true, 'Judul trip wajib diisi'],
+      required: [true, 'Trip title is required'],
       trim: true,
     },
     country: {
@@ -67,21 +67,21 @@ const tripSchema = new mongoose.Schema(
     },
     price: {
       type: Number,
-      required: [true, 'Harga wajib diisi'],
-      min: [0, 'Harga tidak boleh negatif'],
+      required: [true, 'Price is required'],
+      min: [0, 'Price cannot be negative'],
     },
     quota: {
       type: Number,
-      required: [true, 'Kuota wajib diisi'],
-      min: [1, 'Kuota minimal 1'],
+      required: [true, 'Quota is required'],
+      min: [1, 'Quota must be at least 1'],
     },
     start_date: {
       type: Date,
-      required: [true, 'Tanggal mulai wajib diisi'],
+      required: [true, 'Start date is required'],
     },
     end_date: {
       type: Date,
-      required: [true, 'Tanggal selesai wajib diisi'],
+      required: [true, 'End date is required'],
     },
     duration_days: {
       type: Number,
@@ -108,7 +108,7 @@ const tripSchema = new mongoose.Schema(
 
 tripSchema.pre('validate', function (next) {
   if (this.start_date && this.end_date && this.end_date < this.start_date) {
-    this.invalidate('end_date', 'end_date tidak boleh lebih awal dari start_date');
+    this.invalidate('end_date', 'end_date cannot be earlier than start_date');
   }
   next();
 });

@@ -5,21 +5,21 @@ const userSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      required: [true, 'Nama wajib diisi'],
+      required: [true, 'Name is required'],
       trim: true,
     },
     email: {
       type: String,
-      required: [true, 'Email wajib diisi'],
+      required: [true, 'Email is required'],
       unique: true,
       lowercase: true,
       trim: true,
-      match: [/^\S+@\S+\.\S+$/, 'Format email tidak valid'],
+      match: [/^\S+@\S+\.\S+$/, 'Email format is invalid'],
     },
     password: {
       type: String,
-      required: [true, 'Password wajib diisi'],
-      minlength: [6, 'Password minimal 6 karakter'],
+      required: [true, 'Password is required'],
+      minlength: [6, 'Password must be at least 6 characters long'],
       select: false, // tidak ikut terkirim di response
     },
     phone: {

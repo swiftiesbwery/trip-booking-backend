@@ -1,5 +1,6 @@
 const express = require('express');
 const admin = require('../controllers/adminController');
+const adminItinerary = require('../controllers/adminItineraryController');
 const { protect, restrictTo } = require('../middleware/authMiddleware');
 
 const router = express.Router();
@@ -26,5 +27,9 @@ router.get('/users/:id', admin.getUser);
 router.patch('/users/:id/verification', admin.updateUserVerification);
 
 router.get('/reviews', admin.listReviews);
+
+router.get('/itineraries', adminItinerary.listItineraries);
+router.get('/itineraries/:id', adminItinerary.getItinerary);
+router.patch('/itineraries/:id', adminItinerary.updateItinerary);
 
 module.exports = router;

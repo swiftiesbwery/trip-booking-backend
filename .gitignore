@@ -2,6 +2,8 @@ node_modules/
 .env
 uploads/payments/*
 !uploads/payments/.gitkeep
+uploads/reviews/*
+!uploads/reviews/.gitkeep
 .agents/
 .codex/
 npm-debug.log*

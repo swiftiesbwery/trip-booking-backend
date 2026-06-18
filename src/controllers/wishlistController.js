@@ -14,7 +14,7 @@ const addWishlist = async (req, res, next) => {
   try {
     const { trip_id, destination_id } = req.body;
     if ((!trip_id && !destination_id) || (trip_id && destination_id)) {
-      return next(new AppError('Pilih salah satu trip_id atau destination_id', 400));
+      return next(new AppError('Choose either trip_id or destination_id', 400));
     }
 
     const field = trip_id ? 'trip_id' : 'destination_id';
@@ -25,13 +25,13 @@ const addWishlist = async (req, res, next) => {
     if (trip_id) {
       sqlItem = await sqlRead.getTripByMongoId(value, { activeOnly: false });
       if (!sqlItem && !(mongoose.isValidObjectId(value) && await Trip.exists({ _id: value }))) {
-        return next(new AppError('Trip tidak ditemukan', 404));
+        return next(new AppError('Trip not found', 404));
       }
     }
     if (destination_id) {
       sqlItem = await sqlRead.getDestinationByMongoId(value);
       if (!sqlItem && !(mongoose.isValidObjectId(value) && await Destination.exists({ _id: value }))) {
-        return next(new AppError('Destination tidak ditemukan', 404));
+        return next(new AppError('Destination not found', 404));
       }
     }
 
@@ -61,7 +61,7 @@ const addWishlist = async (req, res, next) => {
     res.status(201).json({ status: 'success', data: { wishlist } });
   } catch (err) {
     if (err.code === 11000) {
-      return next(new AppError('Item sudah ada di wishlist', 409));
+      return next(new AppError('Item is already in the wishlist', 409));
     }
     next(err);
   }
@@ -87,7 +87,7 @@ const deleteWishlist = async (req, res, next) => {
         wishlistId: req.params.id,
         userId: String(req.user._id),
       });
-      if (!deleted) return next(new AppError('Wishlist tidak ditemukan', 404));
+      if (!deleted) return next(new AppError('Wishlist not found', 404));
       return res.status(204).send();
     }
 
@@ -96,7 +96,7 @@ const deleteWishlist = async (req, res, next) => {
       _id: req.params.id,
       user_id: String(req.user._id),
     });
-    if (!wishlist) return next(new AppError('Wishlist tidak ditemukan', 404));
+    if (!wishlist) return next(new AppError('Wishlist not found', 404));
     await deleteWishlistMirror(wishlist);
     await wishlist.deleteOne();
     res.status(204).send();

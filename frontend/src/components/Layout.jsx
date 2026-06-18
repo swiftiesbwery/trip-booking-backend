@@ -9,7 +9,6 @@ const filterOptions = [
 ];
 
 const sortOptions = [
-  ['name_asc', 'A-Z'],
   ['price_asc', 'Price Low-High'],
   ['price_desc', 'Price High-Low'],
 ];
@@ -19,7 +18,7 @@ export function Navbar() {
   const location = useLocation();
   const [transparent, setTransparent] = useState(false);
   const [filter, setFilter] = useState('all');
-  const [sort, setSort] = useState('name_asc');
+  const [sort, setSort] = useState('');
   const [openMenu, setOpenMenu] = useState('');
   const isExplore = location.pathname === '/explore';
 
@@ -40,7 +39,7 @@ export function Navbar() {
     if (!isExplore) {
       setOpenMenu('');
       setFilter('all');
-      setSort('name_asc');
+      setSort('');
     }
   }, [isExplore]);
 
@@ -144,6 +143,7 @@ const adminLinks = [
   ['', 'Overview'],
   ['trips', 'Trips'],
   ['destinations', 'Destinations'],
+  ['itineraries', 'Itineraries'],
   ['bookings', 'Bookings'],
   ['payments', 'Payments'],
   ['reviews', 'Reviews'],

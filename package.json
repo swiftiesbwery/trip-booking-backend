@@ -7,6 +7,9 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "migrate:trip-destinations": "node scripts/migrateTripDestinations.js",
+    "seed:domestic-destination-images": "node scripts/seedDomesticDestinationImages.js",
+    "seed:international-catalog": "node scripts/seedInternationalCatalog.js",
+    "seed:itinerary-templates": "node scripts/seedItineraryTemplates.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "test:dual-write": "node scripts/testDualWrite.js",
     "test:wishlist": "node scripts/testWishlist.js"

@@ -25,8 +25,8 @@ const destinationSchema = new mongoose.Schema(
     image_url: String,
     price: {
       type: Number,
-      required: [true, 'Harga destinasi wajib diisi'],
-      min: [0, 'Harga destinasi tidak boleh negatif'],
+      required: [true, 'Destination price is required'],
+      min: [0, 'Destination price cannot be negative'],
     },
   },
   { timestamps: true }

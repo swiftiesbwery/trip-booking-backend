@@ -19,10 +19,10 @@ const getAllDestinations = async (req, res, next) => {
       max: 100,
     });
     if (!CATALOG_SORTS.includes(sort)) {
-      return next(new AppError('Pilihan sort tidak valid', 400));
+      return next(new AppError('Invalid sort option', 400));
     }
     if (!CATALOG_CATEGORIES.includes(category)) {
-      return next(new AppError('Pilihan category tidak valid', 400));
+      return next(new AppError('Invalid category option', 400));
     }
     const { destinations, total } = await sqlRead.listDestinations({
       search,
@@ -50,7 +50,7 @@ const getDestinationById = async (req, res, next) => {
   try {
     const destination = await sqlRead.getDestinationByMongoId(req.params.id);
     if (!destination) {
-      return next(new AppError('Destinasi tidak ditemukan', 404));
+      return next(new AppError('Destination not found', 404));
     }
 
     const trips = await sqlRead.listTripsForDestination(req.params.id);

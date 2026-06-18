@@ -21,18 +21,20 @@ const catalogError = (message, statusCode = 400) => {
   error.statusCode = statusCode;
   return error;
 };
+const isMongoObjectId = (value) =>
+  typeof value === 'string' && mongoose.isValidObjectId(value);
 const allowedCategories = new Set(['all', 'domestic', 'international']);
 const normalizeCategory = (value = 'all') => {
   const category = String(value || 'all').toLowerCase();
   if (!allowedCategories.has(category)) {
-    throw catalogError('Pilihan category tidak valid', 400);
+    throw catalogError('Invalid category option', 400);
   }
   return category;
 };
 const normalizeCatalogWriteCategory = (value, fallback = 'domestic') => {
   const category = String(value || fallback).toLowerCase();
   if (!['domestic', 'international'].includes(category)) {
-    throw catalogError('Pilihan category tidak valid', 400);
+    throw catalogError('Invalid category option', 400);
   }
   return category;
 };
@@ -50,7 +52,7 @@ const mongoIds = (rows, field = 'mongo_id') =>
     ...new Set(
       rows
         .map((row) => row[field])
-        .filter((value) => value && mongoose.isValidObjectId(value))
+        .filter((value) => value && isMongoObjectId(String(value)))
         .map(String)
     ),
   ];
@@ -61,7 +63,7 @@ const mapById = (items) =>
   new Map(items.map((item) => [String(item._id), item.toObject ? item.toObject() : item]));
 
 const loadTripExtras = async (ids) => {
-  const validIds = ids.filter((id) => mongoose.isValidObjectId(id));
+  const validIds = ids.filter((id) => isMongoObjectId(id));
   if (!validIds.length) return new Map();
   const trips = await Trip.find({ _id: { $in: validIds } })
     .select('image_url duration_days departure_date facilities itinerary created_by')
@@ -70,7 +72,7 @@ const loadTripExtras = async (ids) => {
 };
 
 const loadDestinationExtras = async (ids) => {
-  const validIds = ids.filter((id) => mongoose.isValidObjectId(id));
+  const validIds = ids.filter((id) => isMongoObjectId(id));
   if (!validIds.length) return new Map();
   const destinations = await Destination.find({ _id: { $in: validIds } })
     .select('image_url')
@@ -81,6 +83,7 @@ const loadDestinationExtras = async (ids) => {
 const destinationFromRow = (row, extras = {}) => ({
   _id: publicId(row, 'sql-destination-'),
   id: row.id,
+  title: row.city,
   city: row.city,
   name: row.city,
   province: row.province,
@@ -119,7 +122,11 @@ const getUserByEmail = async (email) => {
 };
 
 const getUserByMongoId = async (id) => {
-  const [rows] = await sqlPool.query('SELECT * FROM users WHERE mongo_id = ? LIMIT 1', [id]);
+  const sqlUserId = sqlNumericId(id, 'sql-user-');
+  const [rows] = await sqlPool.query(
+    'SELECT * FROM users WHERE mongo_id = ? OR id = ? LIMIT 1',
+    [id, sqlUserId]
+  );
   return rows.length ? userFromRow(rows[0]) : null;
 };
 
@@ -455,8 +462,8 @@ const listAdminDestinations = async ({ page, limit, sort = 'name_asc', category 
 };
 
 const normalizeSqlTripDestinations = async (connection, destinations = []) => {
-  if (!Array.isArray(destinations)) throw catalogError('destinations harus berupa array');
-  if (!destinations.length) throw catalogError('Destinations minimal berisi 1 destinasi');
+  if (!Array.isArray(destinations)) throw catalogError('destinations must be an array');
+  if (!destinations.length) throw catalogError('Destinations must include at least one destination');
 
   const normalized = [];
   const seen = new Set();
@@ -468,8 +475,8 @@ const normalizeSqlTripDestinations = async (connection, destinations = []) => {
       rawId,
       'sql-destination-'
     );
-    if (!destinationId) throw catalogError(`destinations[${index}] tidak ditemukan`, 400);
-    if (seen.has(destinationId)) throw catalogError('Destination dalam trip tidak boleh duplikat');
+    if (!destinationId) throw catalogError(`destinations[${index}] not found`, 400);
+    if (seen.has(destinationId)) throw catalogError('The same destination cannot be added twice');
     seen.add(destinationId);
     normalized.push({
       destination_id: destinationId,
@@ -536,7 +543,7 @@ const updateAdminTrip = async ({ id, data }) => {
   try {
     await connection.beginTransaction();
     const tripId = await getSqlId(connection, 'trips', id, 'sql-trip-');
-    if (!tripId) throw catalogError('Trip tidak ditemukan', 404);
+    if (!tripId) throw catalogError('Trip not found', 404);
 
     const fields = [];
     const params = [];
@@ -584,12 +591,12 @@ const deleteAdminTrip = async (id) => {
   try {
     await connection.beginTransaction();
     const tripId = await getSqlId(connection, 'trips', id, 'sql-trip-');
-    if (!tripId) throw catalogError('Trip tidak ditemukan', 404);
+    if (!tripId) throw catalogError('Trip not found', 404);
     const [[booking]] = await connection.query(
       'SELECT id FROM bookings WHERE trip_id = ? LIMIT 1',
       [tripId]
     );
-    if (booking) throw catalogError('Trip yang sudah memiliki booking tidak dapat dihapus');
+    if (booking) throw catalogError('This trip cannot be deleted because it already has bookings');
     await connection.query('DELETE FROM wishlists WHERE trip_id = ?', [tripId]);
     await connection.query('DELETE FROM trip_destinations WHERE trip_id = ?', [tripId]);
     await connection.query('DELETE FROM trips WHERE id = ?', [tripId]);
@@ -602,16 +609,7 @@ const deleteAdminTrip = async (id) => {
   }
 };
 
-const getAdminDestination = async (id) => {
-  const [rows] = await sqlPool.query(
-    `SELECT *
-     FROM destinations
-     WHERE id = ?`,
-    [id]
-  );
-
-  return rows[0] || null;
-};
+const getAdminDestination = async (id) => getDestinationByMongoId(id);
 
 const createAdminDestination = async (data) => {
   const [result] = await sqlPool.query(
@@ -635,12 +633,12 @@ const updateAdminDestination = async ({ id, data }) => {
   try {
     await connection.beginTransaction();
     const destinationId = await getSqlId(connection, 'destinations', id, 'sql-destination-');
-    if (!destinationId) throw catalogError('Destination tidak ditemukan', 404);
+    if (!destinationId) throw catalogError('Destination not found', 404);
     const [[currentDestination]] = await connection.query(
       'SELECT * FROM destinations WHERE id = ? FOR UPDATE',
       [destinationId]
     );
-    if (!currentDestination) throw catalogError('Destination tidak ditemukan', 404);
+    if (!currentDestination) throw catalogError('Destination not found', 404);
 
     const normalizedData = {
       city: data.city,
@@ -712,17 +710,17 @@ const deleteAdminDestination = async (id) => {
   try {
     await connection.beginTransaction();
     const destinationId = await getSqlId(connection, 'destinations', id, 'sql-destination-');
-    if (!destinationId) throw catalogError('Destination tidak ditemukan', 404);
+    if (!destinationId) throw catalogError('Destination not found', 404);
     const [[trip]] = await connection.query(
       'SELECT trip_id FROM trip_destinations WHERE destination_id = ? LIMIT 1',
       [destinationId]
     );
-    if (trip) throw catalogError('Destination yang terhubung dengan trip tidak dapat dihapus');
+    if (trip) throw catalogError('This destination cannot be deleted because it is linked to a trip');
     const [[booking]] = await connection.query(
       'SELECT id FROM bookings WHERE destination_id = ? LIMIT 1',
       [destinationId]
     );
-    if (booking) throw catalogError('Destination yang memiliki booking tidak dapat dihapus');
+    if (booking) throw catalogError('This destination cannot be deleted because it already has bookings');
     await connection.query('DELETE FROM wishlists WHERE destination_id = ?', [destinationId]);
     await connection.query('DELETE FROM destinations WHERE id = ?', [destinationId]);
     await connection.commit();
@@ -736,6 +734,7 @@ const deleteAdminDestination = async (id) => {
 
 const bookingFromRow = (row, trip = null, destination = null) => ({
   _id: publicId(row, 'sql-booking-'),
+  id: row.id,
   user_id: userFromRow(row),
   trip_id: trip,
   destination_id: destination,
@@ -749,6 +748,49 @@ const bookingFromRow = (row, trip = null, destination = null) => ({
   updatedAt: row.updated_at,
 });
 
+const hydrateBookingRows = async (rows) => {
+  const tripIds = [...new Set(rows.map((row) => row.trip_id).filter(Boolean))];
+  const destinationIds = [
+    ...new Set(rows.map((row) => row.destination_id).filter(Boolean)),
+  ];
+  const tripRows = tripIds.length
+    ? (await sqlPool.query('SELECT * FROM trips WHERE id IN (?)', [tripIds]))[0]
+    : [];
+  const destinationRows = destinationIds.length
+    ? (await sqlPool.query('SELECT * FROM destinations WHERE id IN (?)', [destinationIds]))[0]
+    : [];
+  const tripDestinationMap = await loadTripDestinations(tripRows.map((row) => row.id));
+  const tripExtrasMap = await loadTripExtras(mongoIds(tripRows));
+  const destinationExtrasMap = await loadDestinationExtras(mongoIds(destinationRows));
+  const tripsById = new Map(
+    tripRows.map((row) => [
+      row.id,
+      tripFromRow(
+        row,
+        tripDestinationMap.get(row.id) || [],
+        tripExtrasMap.get(String(row.mongo_id))
+      ),
+    ])
+  );
+  const destinationsById = new Map(
+    destinationRows.map((row) => [
+      row.id,
+      destinationFromRow(row, destinationExtrasMap.get(String(row.mongo_id))),
+    ])
+  );
+  return rows.map((row) =>
+    bookingFromRow(
+      {
+        ...row,
+        user_mongo_id: row.mongo_id_user,
+        booking_mongo_id: row.mongo_id,
+      },
+      tripsById.get(row.trip_id) || null,
+      destinationsById.get(row.destination_id) || null
+    )
+  );
+};
+
 const listBookings = async ({ userId, status, page, limit }) => {
   const where = ['u.mongo_id = ?'];
   const params = [userId];
@@ -757,6 +799,59 @@ const listBookings = async ({ userId, status, page, limit }) => {
     params.push(status);
   }
   const whereSql = `WHERE ${where.join(' AND ')}`;
+  const [countRows] = await sqlPool.query(
+    `SELECT COUNT(*) AS total
+     FROM bookings b
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN trips t ON t.id = b.trip_id
+     ${whereSql}`,
+    params
+  );
+  const [rows] = await sqlPool.query(
+    `SELECT
+      b.*,
+      u.mongo_id AS mongo_id_user,
+      u.name,
+      u.email,
+      u.phone,
+      u.role,
+      u.is_verified,
+      u.created_at AS user_created_at,
+      u.updated_at AS user_updated_at,
+      p.mongo_id AS payment_mongo_id,
+      p.amount AS payment_amount,
+      p.method AS payment_method,
+      p.proof_url AS payment_proof_url,
+      p.bank_name AS payment_bank_name,
+      p.card_last4 AS payment_card_last4,
+      p.status AS payment_status,
+      p.created_at AS payment_created_at,
+      p.updated_at AS payment_updated_at
+     FROM bookings b
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN trips t ON t.id = b.trip_id
+     LEFT JOIN payments p ON p.booking_id = b.id
+     ${whereSql}
+     ORDER BY b.created_at DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, (page - 1) * limit]
+  );
+  const bookings = await hydrateBookingRows(rows);
+  return { bookings, total: Number(countRows[0]?.total || 0) };
+};
+
+const listAdminBookings = async ({ status, bookingType, page, limit }) => {
+  const where = [];
+  const params = [];
+  if (status) {
+    where.push('b.status = ?');
+    params.push(status);
+  }
+  if (bookingType) {
+    where.push('b.booking_type = ?');
+    params.push(bookingType);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const [countRows] = await sqlPool.query(
     `SELECT COUNT(*) AS total
      FROM bookings b
@@ -792,53 +887,13 @@ const listBookings = async ({ userId, status, page, limit }) => {
      LIMIT ? OFFSET ?`,
     [...params, limit, (page - 1) * limit]
   );
-  const tripIds = [...new Set(rows.map((row) => row.trip_id).filter(Boolean))];
-  const destinationIds = [
-    ...new Set(rows.map((row) => row.destination_id).filter(Boolean)),
-  ];
-  const tripRows = tripIds.length
-    ? (await sqlPool.query(`SELECT * FROM trips WHERE id IN (?)`, [tripIds]))[0]
-    : [];
-  const destinationRows = destinationIds.length
-    ? (await sqlPool.query(`SELECT * FROM destinations WHERE id IN (?)`, [destinationIds]))[0]
-    : [];
-  const tripDestinationMap = await loadTripDestinations(tripRows.map((row) => row.id));
-  const tripExtrasMap = await loadTripExtras(mongoIds(tripRows));
-  const destinationExtrasMap = await loadDestinationExtras(mongoIds(destinationRows));
-  const tripsById = new Map(
-    tripRows.map((row) => [
-      row.id,
-      tripFromRow(
-        row,
-        tripDestinationMap.get(row.id) || [],
-        tripExtrasMap.get(String(row.mongo_id))
-      ),
-    ])
-  );
-  const destinationsById = new Map(
-    destinationRows.map((row) => [
-      row.id,
-      destinationFromRow(row, destinationExtrasMap.get(String(row.mongo_id))),
-    ])
-  );
-  const bookings = rows.map((row) =>
-    bookingFromRow(
-      {
-        ...row,
-        mongo_id: row.mongo_id,
-        user_mongo_id: row.mongo_id_user,
-        booking_mongo_id: row.mongo_id,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-      },
-      tripsById.get(row.trip_id) || null,
-      destinationsById.get(row.destination_id) || null
-    )
-  );
-  return { bookings, total: Number(countRows[0]?.total || 0) };
+  const bookings = await hydrateBookingRows(rows);
+  const total = Number(countRows[0]?.total || 0);
+  return { items: bookings, total, page, totalPages: Math.ceil(total / limit) };
 };
 
 const getBookingByMongoId = async (id, userId) => {
+  const bookingIdNumber = sqlNumericId(id, 'sql-booking-');
   const [rows] = await sqlPool.query(
     `SELECT
       b.*,
@@ -862,9 +917,9 @@ const getBookingByMongoId = async (id, userId) => {
      FROM bookings b
      JOIN users u ON u.id = b.user_id
      LEFT JOIN payments p ON p.booking_id = b.id
-     WHERE b.mongo_id = ? AND u.mongo_id = ?
+     WHERE (b.mongo_id = ? OR b.id = ?) AND u.mongo_id = ?
      LIMIT 1`,
-    [id, userId]
+    [id, bookingIdNumber, userId]
   );
   if (!rows.length) return null;
   const row = rows[0];
@@ -903,6 +958,180 @@ const getBookingByMongoId = async (id, userId) => {
   );
 };
 
+const getAdminBooking = async (id) => {
+  const bookingIdNumber = sqlNumericId(id, 'sql-booking-');
+  const [rows] = await sqlPool.query(
+    `SELECT
+      b.*,
+      u.mongo_id AS mongo_id_user,
+      u.name,
+      u.email,
+      u.phone,
+      u.role,
+      u.is_verified,
+      u.created_at AS user_created_at,
+      u.updated_at AS user_updated_at,
+      p.mongo_id AS payment_mongo_id,
+      p.amount AS payment_amount,
+      p.method AS payment_method,
+      p.proof_url AS payment_proof_url,
+      p.bank_name AS payment_bank_name,
+      p.card_last4 AS payment_card_last4,
+      p.status AS payment_status,
+      p.created_at AS payment_created_at,
+      p.updated_at AS payment_updated_at
+     FROM bookings b
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN payments p ON p.booking_id = b.id
+     WHERE b.mongo_id = ? OR b.id = ?
+     LIMIT 1`,
+    [id, bookingIdNumber]
+  );
+  if (!rows.length) return null;
+  const [booking] = await hydrateBookingRows(rows);
+  return booking;
+};
+
+const updateAdminBookingStatus = async ({ bookingId, status, changedBy }) => {
+  const connection = await sqlPool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const bookingIdNumber = sqlNumericId(bookingId, 'sql-booking-');
+    const [[booking]] = await connection.query(
+      'SELECT * FROM bookings WHERE mongo_id = ? OR id = ? LIMIT 1 FOR UPDATE',
+      [bookingId, bookingIdNumber]
+    );
+    if (!booking) {
+      const error = catalogError('Booking not found', 404);
+      throw error;
+    }
+    if (booking.status !== status) {
+      await connection.query(
+        'UPDATE bookings SET status = ?, updated_at = NOW() WHERE id = ?',
+        [status, booking.id]
+      );
+      const changedBySqlId = changedBy
+        ? await getSqlId(connection, 'users', changedBy, 'sql-user-')
+        : null;
+      await connection.query(
+        `INSERT INTO booking_history
+          (booking_id, changed_by, previous_status, new_status, notes)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          booking.id,
+          changedBySqlId,
+          booking.status,
+          status,
+          'Status booking diperbarui oleh admin',
+        ]
+      );
+    }
+    await connection.commit();
+    return getAdminBooking(bookingId);
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
+const getReviewableBooking = async ({ bookingId, tripId, userId }) => {
+  const tripIdNumber = sqlNumericId(tripId, 'sql-trip-');
+  const tripFilter = tripId ? 'AND (t.mongo_id = ? OR t.id = ?)' : '';
+  const tripParams = tripId ? [tripId, tripIdNumber] : [];
+  const [rows] = await sqlPool.query(
+    `SELECT
+      b.id,
+      b.mongo_id,
+      b.status,
+      b.booking_type,
+      t.id AS trip_sql_id,
+      t.mongo_id AS trip_mongo_id,
+      t.title AS trip_title,
+      p.status AS payment_status,
+      u.mongo_id AS user_mongo_id,
+      u.name AS user_name
+     FROM bookings b
+     JOIN users u ON u.id = b.user_id
+     JOIN trips t ON t.id = b.trip_id
+     LEFT JOIN payments p ON p.booking_id = b.id
+     WHERE b.id = ?
+       AND u.mongo_id = ?
+       AND b.booking_type = 'trip'
+       AND b.status IN ('confirmed', 'completed')
+       AND p.status = 'verified'
+       ${tripFilter}
+     LIMIT 1`,
+    [bookingId, userId, ...tripParams]
+  );
+  if (!rows.length) return null;
+  const row = rows[0];
+  return {
+    id: row.id,
+    _id: publicId(row, 'sql-booking-'),
+    trip_id: publicId({ id: row.trip_sql_id, mongo_id: row.trip_mongo_id }, 'sql-trip-'),
+    trip_title: row.trip_title,
+    user_id: row.user_mongo_id,
+    user_name: row.user_name,
+    status: row.status,
+    payment_status: row.payment_status,
+  };
+};
+
+const getBookingSqlId = async (bookingId) => {
+  const numericId = sqlNumericId(bookingId, 'sql-booking-');
+  const [rows] = await sqlPool.query(
+    'SELECT id FROM bookings WHERE id = ? OR mongo_id = ? LIMIT 1',
+    [numericId, String(bookingId || '')]
+  );
+  return rows[0]?.id || null;
+};
+
+const getLatestReviewableBookingForUser = async ({ userId, tripId = null }) => {
+  const tripIdNumber = tripId ? sqlNumericId(tripId, 'sql-trip-') : null;
+  const params = [userId];
+  const tripFilter = tripId ? 'AND (t.mongo_id = ? OR t.id = ?)' : '';
+  if (tripId) params.push(tripId, tripIdNumber);
+  const [rows] = await sqlPool.query(
+    `SELECT
+      b.id,
+      b.mongo_id,
+      b.status,
+      b.booking_type,
+      t.id AS trip_sql_id,
+      t.mongo_id AS trip_mongo_id,
+      t.title AS trip_title,
+      p.status AS payment_status,
+      u.mongo_id AS user_mongo_id,
+      u.name AS user_name
+     FROM bookings b
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN trips t ON t.id = b.trip_id
+     LEFT JOIN payments p ON p.booking_id = b.id
+     WHERE u.mongo_id = ?
+       AND b.booking_type = 'trip'
+       AND b.status IN ('confirmed', 'completed')
+       AND p.status = 'verified'
+       ${tripFilter}
+     ORDER BY b.id DESC
+     LIMIT 1`,
+    params
+  );
+  if (!rows.length) return null;
+  const row = rows[0];
+  return {
+    id: row.id,
+    _id: publicId(row, 'sql-booking-'),
+    trip_id: publicId({ id: row.trip_sql_id, mongo_id: row.trip_mongo_id }, 'sql-trip-'),
+    trip_title: row.trip_title,
+    user_id: row.user_mongo_id,
+    user_name: row.user_name,
+    status: row.status,
+    payment_status: row.payment_status,
+  };
+};
+
 const listPayments = async (userId) => {
   const [rows] = await sqlPool.query(
     `SELECT
@@ -935,8 +1164,16 @@ const paymentAdminFromRow = (row) => ({
   id: row.id,
   booking_id: {
     _id: row.booking_mongo_id,
+    id: row.booking_id,
     status: row.booking_status,
   },
+  trip_id: row.trip_id
+    ? {
+        _id: row.trip_mongo_id || `sql-trip-${row.trip_id}`,
+        id: row.trip_id,
+        title: row.trip_title,
+      }
+    : null,
   user_id: {
     _id: row.user_mongo_id,
     name: row.user_name,
@@ -964,8 +1201,9 @@ const listAdminPayments = async ({ status, page, limit }) => {
   const [countRows] = await sqlPool.query(
     `SELECT COUNT(*) AS total
      FROM payments p
-     JOIN users u ON p.user_id = u.id
      JOIN bookings b ON p.booking_id = b.id
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN trips t ON t.id = b.trip_id
      ${whereSql}`,
     params
   );
@@ -987,10 +1225,14 @@ const listAdminPayments = async ({ status, page, limit }) => {
       u.name AS user_name,
       u.email AS user_email,
       b.mongo_id AS booking_mongo_id,
-      b.status AS booking_status
+      b.status AS booking_status,
+      t.id AS trip_id,
+      t.mongo_id AS trip_mongo_id,
+      t.title AS trip_title
      FROM payments p
-     JOIN users u ON p.user_id = u.id
      JOIN bookings b ON p.booking_id = b.id
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN trips t ON t.id = b.trip_id
      ${whereSql}
      ORDER BY p.id DESC
      LIMIT ? OFFSET ?`,
@@ -1004,12 +1246,46 @@ const listAdminPayments = async ({ status, page, limit }) => {
   };
 };
 
+const getAdminPayment = async (paymentId) => {
+  const sqlPaymentIdNumber = sqlNumericId(paymentId, 'sql-payment-');
+  const [rows] = await sqlPool.query(
+    `SELECT
+      p.id,
+      p.mongo_id,
+      p.booking_id,
+      p.user_id,
+      p.amount,
+      p.method,
+      p.proof_url,
+      p.bank_name,
+      p.card_last4,
+      p.status,
+      p.created_at,
+      p.updated_at,
+      u.mongo_id AS user_mongo_id,
+      u.name AS user_name,
+      u.email AS user_email,
+      b.mongo_id AS booking_mongo_id,
+      b.status AS booking_status,
+      t.id AS trip_id,
+      t.mongo_id AS trip_mongo_id,
+      t.title AS trip_title
+     FROM payments p
+     JOIN bookings b ON p.booking_id = b.id
+     JOIN users u ON u.id = b.user_id
+     LEFT JOIN trips t ON t.id = b.trip_id
+     WHERE p.mongo_id = ? OR p.id = ?
+     LIMIT 1`,
+    [paymentId, sqlPaymentIdNumber]
+  );
+  return rows.length ? paymentAdminFromRow(rows[0]) : null;
+};
+
 const updateAdminPaymentStatus = async ({ paymentId, status, changedBy }) => {
   const connection = await sqlPool.getConnection();
   try {
     await connection.beginTransaction();
-    const sqlPaymentId = sqlPublicId(paymentId, 'sql-payment-');
-    const sqlPaymentIdNumber = /^\d+$/.test(sqlPaymentId) ? Number(sqlPaymentId) : null;
+    const sqlPaymentIdNumber = sqlNumericId(paymentId, 'sql-payment-');
     const [[payment]] = await connection.query(
       `SELECT
         p.*,
@@ -1017,18 +1293,19 @@ const updateAdminPaymentStatus = async ({ paymentId, status, changedBy }) => {
         b.mongo_id AS booking_mongo_id,
         u.mongo_id AS user_mongo_id,
         u.name AS user_name,
-        u.email AS user_email
+        u.email AS user_email,
+        t.id AS trip_id,
+        t.mongo_id AS trip_mongo_id,
+        t.title AS trip_title
        FROM payments p
        JOIN bookings b ON b.id = p.booking_id
-       JOIN users u ON u.id = p.user_id
+       JOIN users u ON u.id = b.user_id
+       LEFT JOIN trips t ON t.id = b.trip_id
        WHERE p.mongo_id = ? OR p.id = ?
        LIMIT 1`,
       [paymentId, sqlPaymentIdNumber]
     );
-    if (!payment) {
-      await connection.rollback();
-      return null;
-    }
+    if (!payment) throw catalogError('Payment not found', 404);
 
     await connection.query(
       'UPDATE payments SET status = ?, updated_at = NOW() WHERE id = ?',
@@ -1075,10 +1352,14 @@ const updateAdminPaymentStatus = async ({ paymentId, status, changedBy }) => {
         u.name AS user_name,
         u.email AS user_email,
         b.mongo_id AS booking_mongo_id,
-        b.status AS booking_status
+        b.status AS booking_status,
+        t.id AS trip_id,
+        t.mongo_id AS trip_mongo_id,
+        t.title AS trip_title
        FROM payments p
-       JOIN users u ON p.user_id = u.id
        JOIN bookings b ON p.booking_id = b.id
+       JOIN users u ON u.id = b.user_id
+       LEFT JOIN trips t ON t.id = b.trip_id
        WHERE p.id = ?
        LIMIT 1`,
       [payment.id]
@@ -1170,13 +1451,13 @@ const createSqlWishlist = async ({ userId, tripId, destinationId }) => {
       'SELECT id FROM users WHERE mongo_id = ? LIMIT 1',
       [userId]
     );
-    if (!user) throw new Error('User SQL tidak ditemukan');
+    if (!user) throw new Error('SQL user not found');
 
     let sqlTripId = null;
     let sqlDestinationId = null;
     if (tripId) {
       sqlTripId = await getSqlId(connection, 'trips', tripId, 'sql-trip-');
-      if (!sqlTripId) throw new Error('Trip tidak ditemukan');
+      if (!sqlTripId) throw new Error('Trip not found');
     }
     if (destinationId) {
       sqlDestinationId = await getSqlId(
@@ -1185,7 +1466,7 @@ const createSqlWishlist = async ({ userId, tripId, destinationId }) => {
         destinationId,
         'sql-destination-'
       );
-      if (!sqlDestinationId) throw new Error('Destination tidak ditemukan');
+      if (!sqlDestinationId) throw new Error('Destination not found');
     }
 
     const [[existing]] = await connection.query(
@@ -1241,14 +1522,14 @@ const createSqlBooking = async ({ userId, tripId, qty }) => {
       'SELECT id, mongo_id FROM users WHERE mongo_id = ? LIMIT 1',
       [userId]
     );
-    if (!user) throw new Error('User SQL tidak ditemukan');
+    if (!user) throw new Error('SQL user not found');
 
     const sqlTripId = await getSqlId(connection, 'trips', tripId, 'sql-trip-');
     const [[trip]] = await connection.query(
       "SELECT * FROM trips WHERE id = ? AND status = 'active' LIMIT 1",
       [sqlTripId]
     );
-    if (!trip) throw new Error('Trip tidak ditemukan');
+    if (!trip) throw new Error('Trip not found');
 
     const [[booked]] = await connection.query(
       `SELECT COALESCE(SUM(qty), 0) AS total
@@ -1266,7 +1547,7 @@ const createSqlBooking = async ({ userId, tripId, qty }) => {
     const bookingPublicId = `SQLBOOK-${Date.now()}-${Math.random()
       .toString(16)
       .slice(2, 8)}`;
-    await connection.query(
+    const [bookingResult] = await connection.query(
       `INSERT INTO bookings
         (mongo_id, user_id, trip_id, destination_id, booking_type, qty, visit_date,
          status, total_price, created_at, updated_at)
@@ -1280,15 +1561,21 @@ const createSqlBooking = async ({ userId, tripId, qty }) => {
         Number(trip.price) * qty,
       ]
     );
-    const [[bookingRow]] = await connection.query(
-      'SELECT id FROM bookings WHERE mongo_id = ? LIMIT 1',
-      [bookingPublicId]
-    );
+    const bookingId = bookingResult.insertId;
     await connection.query(
       `INSERT INTO booking_history
         (booking_id, changed_by, previous_status, new_status, notes)
        VALUES (?, ?, NULL, 'pending', ?)`,
-      [bookingRow.id, user.id, 'Booking dibuat']
+      [bookingId, user.id, 'Booking dibuat']
+    );
+    const paymentPublicId = `SQLPAY-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2, 8)}`;
+    await connection.query(
+      `INSERT INTO payments
+        (mongo_id, booking_id, user_id, amount, method, proof_url, bank_name, card_last4, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'QRIS', NULL, NULL, NULL, 'pending', NOW(), NOW())`,
+      [paymentPublicId, bookingId, user.id, Number(trip.price) * qty]
     );
     await connection.commit();
     return getBookingByMongoId(bookingPublicId, userId);
@@ -1302,11 +1589,11 @@ const createSqlBooking = async ({ userId, tripId, qty }) => {
 
 const getPendingSqlBookingForPayment = async (bookingId, userId) => {
   const [rows] = await sqlPool.query(
-    `SELECT b.*
+    `SELECT b.*, p.id AS payment_id
      FROM bookings b
      JOIN users u ON u.id = b.user_id
      LEFT JOIN payments p ON p.booking_id = b.id
-     WHERE b.mongo_id = ? AND u.mongo_id = ? AND p.id IS NULL
+     WHERE b.mongo_id = ? AND u.mongo_id = ? AND (p.id IS NULL OR p.status = 'pending')
      LIMIT 1`,
     [bookingId, userId]
   );
@@ -1319,32 +1606,56 @@ const createSqlPayment = async ({ bookingId, userId, method, proofUrl, bankName 
   try {
     await connection.beginTransaction();
     const [[booking]] = await connection.query(
-      `SELECT b.*, u.id AS sql_user_id
+      `SELECT b.*, u.id AS sql_user_id, p.id AS payment_id, p.mongo_id AS payment_mongo_id, p.status AS payment_status
        FROM bookings b
        JOIN users u ON u.id = b.user_id
+       LEFT JOIN payments p ON p.booking_id = b.id
        WHERE b.mongo_id = ? AND u.mongo_id = ? AND b.status = 'pending'
-       LIMIT 1`,
+       LIMIT 1
+       FOR UPDATE`,
       [bookingId, userId]
     );
-    if (!booking) throw new Error('Booking tidak ditemukan');
-    const paymentPublicId = `SQLPAY-${Date.now()}-${Math.random()
-      .toString(16)
-      .slice(2, 8)}`;
-    await connection.query(
-      `INSERT INTO payments
-        (mongo_id, booking_id, user_id, amount, method, proof_url, bank_name, card_last4, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'checking', NOW(), NOW())`,
-      [
-        paymentPublicId,
-        booking.id,
-        booking.sql_user_id,
-        booking.total_price,
-        method,
-        proofUrl,
-        bankName,
-        cardLast4,
-      ]
-    );
+    if (!booking) throw new Error('Booking not found');
+    if (booking.payment_id && booking.payment_status !== 'pending') {
+      const error = new Error('A payment for this booking already exists');
+      error.statusCode = 400;
+      throw error;
+    }
+    const paymentPublicId =
+      booking.payment_mongo_id ||
+      `SQLPAY-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    if (booking.payment_id) {
+      await connection.query(
+        `UPDATE payments
+         SET user_id = ?, amount = ?, method = ?, proof_url = ?, bank_name = ?, card_last4 = ?, status = 'checking', updated_at = NOW()
+         WHERE id = ?`,
+        [
+          booking.sql_user_id,
+          booking.total_price,
+          method,
+          proofUrl,
+          bankName,
+          cardLast4,
+          booking.payment_id,
+        ]
+      );
+    } else {
+      await connection.query(
+        `INSERT INTO payments
+          (mongo_id, booking_id, user_id, amount, method, proof_url, bank_name, card_last4, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'checking', NOW(), NOW())`,
+        [
+          paymentPublicId,
+          booking.id,
+          booking.sql_user_id,
+          booking.total_price,
+          method,
+          proofUrl,
+          bankName,
+          cardLast4,
+        ]
+      );
+    }
     await connection.commit();
     return {
       payment: {
@@ -1380,9 +1691,9 @@ const cancelSqlBooking = async ({ bookingId, userId }) => {
        LIMIT 1`,
       [bookingId, userId]
     );
-    if (!booking) throw new Error('Booking tidak ditemukan');
+    if (!booking) throw new Error('Booking not found');
     if (booking.status !== 'pending') {
-      const error = new Error('Hanya booking pending yang dapat dibatalkan');
+      const error = new Error('Only pending bookings can be cancelled');
       error.statusCode = 400;
       throw error;
     }
@@ -1419,14 +1730,20 @@ module.exports = {
   deleteSqlWishlist,
   ensureCatalogColumns,
   getAdminDestination,
+  getAdminBooking,
+  getAdminPayment,
   getAdminTrip,
   getBookingByMongoId,
+  getBookingSqlId,
+  getLatestReviewableBookingForUser,
+  getReviewableBooking,
   getDestinationByMongoId,
   getPendingSqlBookingForPayment,
   getTripByMongoId,
   getUserByEmail,
   getUserByMongoId,
   listAdminDestinations,
+  listAdminBookings,
   listBookings,
   listDestinations,
   listPayments,
@@ -1437,6 +1754,7 @@ module.exports = {
   listUsers,
   listWishlist,
   updateAdminDestination,
+  updateAdminBookingStatus,
   updateAdminTrip,
   updateAdminPaymentStatus,
 };

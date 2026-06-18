@@ -71,6 +71,13 @@ const featureCards = [
   ['Submit payment', 'Upload or submit payment details and track verification from My bookings.'],
 ];
 
+function sortExploreItems(items, sortBy, getLabel) {
+  const list = [...items];
+  if (sortBy === 'price_asc') return list.sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
+  if (sortBy === 'price_desc') return list.sort((a, b) => (Number(b.price) || 0) - (Number(a.price) || 0));
+  return list.sort((a, b) => (getLabel(a) || '').localeCompare(getLabel(b) || ''));
+}
+
 function useRevealOnScroll() {
   useEffect(() => {
     const items = document.querySelectorAll('.reveal, .reveal-on-scroll');
@@ -172,8 +179,8 @@ export function ExplorePage() {
   const [search, setSearch] = useState('');
   const [tripCategory, setTripCategory] = useState('all');
   const [destinationCategory, setDestinationCategory] = useState('all');
-  const [tripSort, setTripSort] = useState('name_asc');
-  const [destinationSort, setDestinationSort] = useState('name_asc');
+  const [tripSort, setTripSort] = useState('');
+  const [destinationSort, setDestinationSort] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -184,19 +191,26 @@ export function ExplorePage() {
     setLoading(true);
     setError('');
     try {
+      const tripParams = { search: term, limit: 12, category: tripCategory };
+      const destinationParams = { search: term, limit: 12, category: destinationCategory };
+      if (tripSort) tripParams.sort = tripSort;
+      if (destinationSort) destinationParams.sort = destinationSort;
       const requests = [
-        api.get('/trips', { params: { search: term, sort: tripSort, limit: 12, category: tripCategory } }),
-        api.get('/destinations', { params: { search: term, sort: destinationSort, limit: 12, category: destinationCategory } }),
+        api.get('/trips', { params: tripParams }),
+        api.get('/destinations', { params: destinationParams }),
       ];
       if (user?.role === 'user') requests.push(getWishlist());
       const [tripRes, destinationRes, wishlistItems] = await Promise.all(requests);
-      setTrips(tripRes.data.data.trips);
-      setDestinations(destinationRes.data.data.destinations);
+      setTrips(sortExploreItems(tripRes.data.data.trips, tripSort, (item) => item.title));
+      setDestinations(sortExploreItems(destinationRes.data.data.destinations, destinationSort, (item) => item.title || item.city));
       if (wishlistItems) setWishlistByTrip(getWishlistedTripMap(wishlistItems));
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load catalog.');
     } finally { setLoading(false); }
   };
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
   useEffect(() => { load(search); }, [user?._id, tripSort, destinationSort, tripCategory, destinationCategory]);
   useEffect(() => {
     const updateControls = (event) => {
@@ -227,6 +241,20 @@ export function ExplorePage() {
     panels.forEach((panel) => observer.observe(panel));
     return () => observer.disconnect();
   }, [loading, trips, destinations]);
+  useEffect(() => {
+    if (loading) return undefined;
+    const panels = document.querySelectorAll('.explore-story-panel');
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.22 });
+    panels.forEach((panel) => observer.observe(panel));
+    return () => observer.disconnect();
+  }, [loading, trips.length, destinations.length]);
 
   const wish = async (trip_id) => {
     if (!user) return navigate('/login');
@@ -249,26 +277,56 @@ export function ExplorePage() {
   };
 
   return <>
-    <section className="explore-header">
-      <div className="explore-header-inner">
-        <p className="eyebrow">EXPLORE WANDERLY</p>
-        <h1>Explore Beautiful Destinations</h1>
-        <p>Find your next favorite place and plan your trip with Wanderly.</p>
-        <form className="explore-search" onSubmit={(e) => { e.preventDefault(); load(search); }}>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search city, country, or trip name" />
-          <button className="button">Explore</button>
-        </form>
-      </div>
-    </section>
-
     <section className="section explore-section"><Alert success={notice} error={error} />
-      {loading ? <div className="page-loader">Finding beautiful trips...</div> : trips.length ? <div className="image-gallery-row"><GalleryHeadingPanel eyebrow="TRIPS" title="Discover Amazing Trips" text="Handpicked experiences for your next unforgettable journey." image={trips[0]?.image_url || hero} />{trips.map((trip, index) => <TripGalleryItem key={trip._id} trip={trip} index={index} onWishlist={wish} isWishlisted={wishlistByTrip.has(String(trip._id))} wishlistBusy={wishlistBusy === trip._id} />)}</div> : <Empty title="No trips found" text="Try a different destination or keyword." />}
+      {loading ? <div className="page-loader">Finding beautiful trips...</div> : trips.length ? <div className="explore-story">
+        <TripsHeroPanel image={trips[0]?.image_url || hero} search={search} setSearch={setSearch} onSearch={(e) => { e.preventDefault(); load(search); }} />
+        <TripsCardsPanel trips={trips} wish={wish} wishlistByTrip={wishlistByTrip} wishlistBusy={wishlistBusy} />
+      </div> : <Empty title="No trips found" text="Try a different destination or keyword." />}
     </section>
 
     <section id="destinations" className="section destination-section">
-      {loading ? <div className="page-loader">Finding beautiful destinations...</div> : destinations.length ? <div className="image-gallery-row"><GalleryHeadingPanel eyebrow="DESTINATIONS" title="Explore Beautiful Destinations" text="Discover places worth visiting around the world." image={destinations[0]?.image_url || hero} />{destinations.map((item, index) => <DestinationGalleryItem key={item._id} item={item} index={index} />)}</div> : <Empty title="No destinations found" text="Try a different destination or keyword." />}
+      {loading ? <div className="page-loader">Finding beautiful destinations...</div> : destinations.length ? <div className="explore-story">
+        <DestinationsHeroPanel image={destinations[0]?.image_url || hero} />
+        <DestinationsCardsPanel destinations={destinations} />
+      </div> : <Empty title="No destinations found" text="Try a different destination or keyword." />}
     </section>
   </>;
+}
+
+function TripsHeroPanel({ image, search, setSearch, onSearch }) {
+  return <section className="explore-story-panel explore-story-hero" style={{ backgroundImage: `url(${image})` }}>
+    <div className="explore-story-copy">
+      <p className="gallery-eyebrow">TRIPS</p>
+      <h1>Discover Amazing Trips</h1>
+      <p>Handpicked experiences for your next unforgettable journey.</p>
+      <form className="explore-search" onSubmit={onSearch}>
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search city, country, or trip name" />
+        <button className="button">Explore</button>
+      </form>
+    </div>
+  </section>;
+}
+
+function TripsCardsPanel({ trips, wish, wishlistByTrip, wishlistBusy }) {
+  return <section className="explore-story-panel explore-story-cards">
+    <div className="image-gallery-row explore-story-row">{trips.map((trip, index) => <TripGalleryItem key={trip._id} trip={trip} index={index} onWishlist={wish} isWishlisted={wishlistByTrip.has(String(trip._id))} wishlistBusy={wishlistBusy === trip._id} />)}</div>
+  </section>;
+}
+
+function DestinationsHeroPanel({ image }) {
+  return <section className="explore-story-panel explore-story-hero" style={{ backgroundImage: `url(${image})` }}>
+    <div className="explore-story-copy">
+      <p className="gallery-eyebrow">DESTINATIONS</p>
+      <h1>Explore Beautiful Destinations</h1>
+      <p>Discover places worth visiting around the world.</p>
+    </div>
+  </section>;
+}
+
+function DestinationsCardsPanel({ destinations }) {
+  return <section className="explore-story-panel explore-story-cards">
+    <div className="image-gallery-row explore-story-row">{destinations.map((item, index) => <DestinationGalleryItem key={item._id} item={item} index={index} />)}</div>
+  </section>;
 }
 
 function GalleryHeadingPanel({ eyebrow, title, text, image }) {
@@ -286,7 +344,7 @@ function TripGalleryItem({ trip, index, onWishlist, isWishlisted, wishlistBusy }
   const place = trip.destinations?.[0]?.destination_id;
   const location = trip.city || place?.city || place?.province || trip.country || place?.country || 'Indonesia';
   const rating = trip.rating?.avg || trip.rating_avg || trip.avg_rating || trip.average_rating || 'New';
-  return <article className={`gallery-item ${index % 2 ? 'gallery-item-slim' : 'gallery-item-wide'}`} style={{ backgroundImage: `url(${image})`, transitionDelay: `${(index % 4) * 90}ms` }}>
+  return <article className={`gallery-item ${index % 2 ? 'gallery-item-slim' : 'gallery-item-wide'}`} style={{ backgroundImage: `url(${image})`, transitionDelay: `${index * 100}ms` }}>
     <div className="gallery-content">
       <p className="gallery-location">{location}</p>
       <h2>{trip.title}</h2>
@@ -339,6 +397,7 @@ export function TripDetailPage() {
   const [message, setMessage] = useState('');
   const [wishlistItem, setWishlistItem] = useState(null);
   const [wishlistBusy, setWishlistBusy] = useState(false);
+  const [previewPhoto, setPreviewPhoto] = useState(null);
 
   const load = async () => {
     const requests = [api.get(`/trips/${id}`), api.get(`/trips/${id}/reviews`)];
@@ -372,10 +431,11 @@ export function TripDetailPage() {
     <section className="detail-layout"><div className="detail-main">
       <div className="info-strip"><div><span>Start</span><strong>{date(trip.start_date || trip.departure_date)}</strong></div><div><span>End</span><strong>{date(trip.end_date)}</strong></div><div><span>Rating</span><strong>{rating?.avg || 'New'} / 5</strong></div><div><span>Group</span><strong>{trip.quota} seats</strong></div></div>
       <div className="content-card"><p className="eyebrow">THE JOURNEY</p><h2>Places on this trip</h2><div className="place-list">{trip.destinations?.map((item, i) => <div key={item.destination_id?._id}><span>{String(i + 1).padStart(2, '0')}</span><img src={item.destination_id?.image_url || hero} /><div><h3>{item.destination_id?.city}</h3><p>{item.destination_id?.province}, {item.destination_id?.country}</p></div></div>)}</div></div>
-      <div className="content-card"><p className="eyebrow">TRAVELER STORIES</p><h2>Reviews</h2>{reviews.length ? <div className="review-list">{reviews.map((item) => <article key={item._id}><div className="avatar">{item.user_id?.name?.[0]}</div><div><strong>{item.user_id?.name}</strong><span>{'★'.repeat(item.rating)}</span><p>{item.comment}</p></div></article>)}</div> : <Empty title="No reviews yet" text="Be the first to share your story." />}
+      <div className="content-card"><p className="eyebrow">TRAVELER STORIES</p><h2>Reviews</h2>{reviews.length ? <div className="review-list">{reviews.map((item) => { const reviewer = item.user_id?.name || item.user_name || 'Traveler'; const photos = item.photos || []; return <article key={item._id}><div className="avatar">{reviewer[0]}</div><div><strong>{reviewer}</strong><span>{'★'.repeat(item.rating)}</span><p>{item.comment}</p>{Boolean(photos.length) && <div className="review-photo-grid">{photos.map((photo) => <button type="button" key={photo} onClick={() => setPreviewPhoto(photo)}><img src={photo} alt={`${reviewer} review`} /></button>)}</div>}</div></article>; })}</div> : <Empty title="No reviews yet" text="Be the first to share your story." />}
         {user?.role === 'user' && <p className="review-guidance">Write a review from an eligible confirmed or completed trip in <Link to="/bookings">My bookings</Link>.</p>}
       </div>
     </div>
     <aside className="booking-summary"><p>Starting from</p><h2>{money(trip.price)}</h2><span>per person</span><Link className="button wide" to={`/booking/trip/${trip._id}`}>Book this trip</Link><button className={`button ghost wide wishlist-detail-button ${wishlistItem ? 'active' : ''}`} disabled={wishlistBusy} onClick={saveTrip}>{wishlistItem ? '♥ Saved to wishlist' : '♡ Save to wishlist'}</button>{message && <small>{message}</small>}<small>Secure booking · Payment verification</small></aside></section>
+    {previewPhoto && <div className="modal-backdrop review-lightbox" onMouseDown={() => setPreviewPhoto(null)}><div className="review-lightbox-content" onMouseDown={(e) => e.stopPropagation()}><button type="button" onClick={() => setPreviewPhoto(null)} aria-label="Close photo preview">×</button><img src={previewPhoto} alt="Review preview" /></div></div>}
   </div>;
 }

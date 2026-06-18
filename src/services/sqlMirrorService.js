@@ -19,14 +19,14 @@ const getSqlId = async (connection, table, id) => {
 
 const getExistingSqlId = async (connection, table, id) => {
   const sqlId = await getSqlId(connection, table, id);
-  if (!sqlId) throw new Error(`SQL ${table} ${mongoId(id)} tidak ditemukan`);
+  if (!sqlId) throw new Error(`SQL ${table} ${mongoId(id)} was not found`);
   return sqlId;
 };
 
 const syncUserInternal = async (connection, userOrId) => {
   const userId = mongoId(userOrId);
   const user = await User.findById(userId).select('+password');
-  if (!user) throw new Error(`MongoDB user ${userId} tidak ditemukan`);
+  if (!user) throw new Error(`MongoDB user ${userId} was not found`);
 
   await connection.query(
     `INSERT INTO users
@@ -59,7 +59,7 @@ const syncUserInternal = async (connection, userOrId) => {
 const syncDestinationInternal = async (connection, destinationOrId) => {
   const destinationId = mongoId(destinationOrId);
   const destination = await Destination.findById(destinationId);
-  if (!destination) throw new Error(`MongoDB destination ${destinationId} tidak ditemukan`);
+  if (!destination) throw new Error(`MongoDB destination ${destinationId} was not found`);
 
   await connection.query(
     `INSERT INTO destinations
@@ -92,7 +92,7 @@ const syncDestinationInternal = async (connection, destinationOrId) => {
 const syncTripInternal = async (connection, tripOrId) => {
   const tripId = mongoId(tripOrId);
   const trip = await Trip.findById(tripId);
-  if (!trip) throw new Error(`MongoDB trip ${tripId} tidak ditemukan`);
+  if (!trip) throw new Error(`MongoDB trip ${tripId} was not found`);
 
   const creatorId = trip.created_by
     ? await syncUserInternal(connection, trip.created_by)
@@ -166,7 +166,7 @@ const syncBookingInternal = async (
 ) => {
   const bookingId = mongoId(bookingOrId);
   const booking = await Booking.findById(bookingId);
-  if (!booking) throw new Error(`MongoDB booking ${bookingId} tidak ditemukan`);
+  if (!booking) throw new Error(`MongoDB booking ${bookingId} was not found`);
 
   const userId = await syncUserInternal(connection, booking.user_id);
   const tripId = booking.trip_id
@@ -299,7 +299,7 @@ const syncWishlist = (wishlist) =>
   runInTransaction(async (connection) => {
     const wishlistId = mongoId(wishlist);
     const item = await Wishlist.findById(wishlistId);
-    if (!item) throw new Error(`MongoDB wishlist ${wishlistId} tidak ditemukan`);
+    if (!item) throw new Error(`MongoDB wishlist ${wishlistId} was not found`);
 
     const userId = mongoose.isValidObjectId(item.user_id)
       ? await syncUserInternal(connection, item.user_id)

@@ -16,6 +16,37 @@ const bankOptions = [
   { key: 'BNI', icon: 'BNI', account: '5566778899' },
 ];
 const accountName = 'Wanderly Travel';
+const reviewPhotoLimit = 5;
+const reviewPhotoMaxSize = 5 * 1024 * 1024;
+const reviewPhotoTypes = ['image/jpeg', 'image/png', 'image/webp'];
+
+const isValidReviewPhoto = (file) =>
+  reviewPhotoTypes.includes(file.type) || /\.(jpe?g|png|webp)$/i.test(file.name);
+
+const postReviewForm = async (formData) => {
+  const token = localStorage.getItem('token');
+  const response = await fetch(`${api.defaults.baseURL}/reviews`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+    }
+    throw new Error(payload.message || 'Review could not be submitted.');
+  }
+
+  return payload;
+};
+
+const postReviewJson = async ({ rating, comment }) => {
+  const { data } = await api.post('/reviews', { rating, comment });
+  return data;
+};
 
 export function BookingPage() {
   const { type, id } = useParams();
@@ -92,23 +123,223 @@ export function MyBookingsPage() {
     e.preventDefault();
     setError('');
     try {
-      await api.post('/reviews', {
-        booking_id: review.booking._id,
-        trip_id: review.booking.trip_id._id,
-        rating: Number(review.rating),
-        comment: review.comment,
+      const rating = Number(review?.rating || 5);
+      const comment = review?.comment || '';
+      const photos = review?.photos || [];
+      console.log('REVIEW STATE', {
+        rating,
+        comment,
+        photos,
       });
+
+      if (photos.length) {
+        const formData = new FormData();
+        formData.append('rating', String(rating));
+        formData.append('comment', comment);
+        photos.forEach((photo) => {
+          formData.append('photos', photo.file);
+        });
+        for (const pair of formData.entries()) {
+          console.log(pair[0], pair[1]);
+        }
+        await postReviewForm(formData);
+      } else {
+        console.log('rating', String(rating));
+        console.log('comment', comment);
+        await postReviewJson({ rating, comment });
+      }
+      photos.forEach((photo) => URL.revokeObjectURL(photo.preview));
       setReview(null);
       setMessage('Review shared successfully. Thank you!');
       await load();
     } catch (err) {
-      setError(err.response?.data?.message || 'Review could not be submitted.');
+      setError(err.response?.data?.message || err.message || 'Review could not be submitted.');
     }
   };
-  return <section className="section"><PageHeader eyebrow="YOUR JOURNEYS" title="My bookings" text="Keep track of every upcoming and completed escape." action={<select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="">All status</option>{['pending','confirmed','completed','cancelled'].map(x => <option key={x}>{x}</option>)}</select>} /><Alert success={message} error={error} />{bookings.length ? <div className="booking-list">{bookings.map((b) => { const item = b.trip_id || b.destination_id; const schedule = b.trip_id ? `${date(b.trip_id.start_date || b.trip_id.departure_date)} — ${date(b.trip_id.end_date || b.trip_id.start_date || b.trip_id.departure_date)}` : date(b.visit_date); const canReview = b.booking_type === 'trip' && ['confirmed', 'completed'].includes(b.status); const alreadyReviewed = b.trip_id && reviewedTripIds.has(b.trip_id._id); return <article key={b._id}><img src={item?.image_url || hero} /><div className="booking-info"><div><p className="eyebrow">{b.booking_type}</p><h3>{item?.title || item?.city}</h3><p>{schedule} · {b.qty} guest(s)</p></div><div><Status value={b.status} /><strong>{money(b.total_price)}</strong></div></div><div className="booking-actions">{b.status === 'pending' && !b.payment_id && <button className="button small" onClick={() => { setError(''); setPayment({ id: b._id, method: 'QRIS', proof: '', total: b.total_price, bank_name: 'BCA', card_number: '', card_holder: '', expiry: '', cvv: '' }); }}>Pay now</button>}{b.status === 'pending' && <button className="button ghost small" onClick={() => cancel(b._id)}>Cancel</button>}{b.payment_id && <Status value={b.payment_id.status} />}{canReview && !alreadyReviewed && <button className="button small" onClick={() => { setError(''); setReview({ booking: b, rating: 5, comment: '' }); }}>Write review</button>}{alreadyReviewed && <span className="review-note success">Reviewed</span>}{!canReview && b.booking_type === 'trip' && <span className="review-note">Review available after payment is verified and booking is confirmed.</span>}</div></article>; })}</div> : <Empty title="No bookings yet" text="Your next beautiful journey starts on the explore page." />}
+  const closeReviewModal = () => {
+    (review?.photos || []).forEach((photo) => URL.revokeObjectURL(photo.preview));
+    setReview(null);
+  };
+  const selectReviewPhotos = (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!files.length) return;
+
+    const currentPhotos = review.photos || [];
+    if (currentPhotos.length + files.length > reviewPhotoLimit) {
+      setError(`You can upload up to ${reviewPhotoLimit} review photos.`);
+      return;
+    }
+
+    const invalidFile = files.find((file) => !isValidReviewPhoto(file));
+    if (invalidFile) {
+      setError('Review photos must be JPG, PNG, or WEBP.');
+      return;
+    }
+
+    const oversizedFile = files.find((file) => file.size > reviewPhotoMaxSize);
+    if (oversizedFile) {
+      setError('Each review photo must be 5MB or smaller.');
+      return;
+    }
+
+    setError('');
+    setReview({
+      ...review,
+      photos: [
+        ...currentPhotos,
+        ...files.map((file) => ({
+          id: `${file.name}-${file.lastModified}-${Math.random()}`,
+          file,
+          preview: URL.createObjectURL(file),
+        })),
+      ],
+    });
+  };
+  const removeReviewPhoto = (photoId) => {
+    const photo = review.photos?.find((item) => item.id === photoId);
+    if (photo) URL.revokeObjectURL(photo.preview);
+    setReview({
+      ...review,
+      photos: (review.photos || []).filter((item) => item.id !== photoId),
+    });
+  };
+  return <section className="section"><PageHeader eyebrow="YOUR JOURNEYS" title="My bookings" text="Keep track of every upcoming and completed escape." action={<select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="">All status</option>{['pending','confirmed','completed','cancelled'].map(x => <option key={x}>{x}</option>)}</select>} /><Alert success={message} error={error} />{bookings.length ? <div className="booking-list">{bookings.map((b) => { const item = b.trip_id || b.destination_id; const schedule = b.trip_id ? `${date(b.trip_id.start_date || b.trip_id.departure_date)} — ${date(b.trip_id.end_date || b.trip_id.start_date || b.trip_id.departure_date)}` : date(b.visit_date); const bookingStatus = String(b.status || '').toLowerCase(); const paymentStatus = String(b.payment_id?.status || b.payment?.status || b.payment_status || '').toLowerCase(); const canPay = b.status === 'pending' && (!b.payment_id || paymentStatus === 'pending'); const canReview = b.booking_type === 'trip' && ['confirmed', 'completed'].includes(b.status) && paymentStatus === 'verified'; const alreadyReviewed = b.trip_id && reviewedTripIds.has(b.trip_id._id); const canPlanItinerary = b.booking_type === 'trip' && ['confirmed', 'completed'].includes(bookingStatus) && paymentStatus === 'verified' && !b.itinerary_ready; const itineraryLabel = b.itinerary_ready ? 'Itinerary Submitted' : 'Plan Itinerary'; console.log({ bookingId: b._id, bookingStatus, paymentStatus, canPlanItinerary }); return <article key={b._id}><img src={item?.image_url || hero} /><div className="booking-info"><div><p className="eyebrow">{b.booking_type}</p><h3>{item?.title || item?.city}</h3><p>{schedule} · {b.qty} guest(s)</p></div><div><Status value={b.status} /><strong>{money(b.total_price)}</strong></div></div><div className="booking-actions">{canPay && <button className="button small" onClick={() => { setError(''); setPayment({ id: b._id, method: 'QRIS', proof: '', total: b.total_price, bank_name: 'BCA', card_number: '', card_holder: '', expiry: '', cvv: '' }); }}>Pay now</button>}{b.status === 'pending' && <button className="button ghost small" onClick={() => cancel(b._id)}>Cancel</button>}{b.payment_id && <Status value={b.payment_id.status} />}{b.itinerary_ready && <span className="status itinerary-ready">Itinerary Submitted</span>}{canReview && !alreadyReviewed && <button className="button small" onClick={() => { setError(''); setReview({ booking: b, rating: 5, comment: '', photos: [] }); }}>Write review</button>}{canPlanItinerary && <Link className="button small" to={`/my-bookings/${b._id}/itinerary`}>{itineraryLabel}</Link>}{alreadyReviewed && <span className="review-note success">Reviewed</span>}{!canReview && b.booking_type === 'trip' && <span className="review-note">Review available after payment is verified and booking is confirmed.</span>}</div></article>; })}</div> : <Empty title="No bookings yet" text="Your next beautiful journey starts on the explore page." />}
     {payment && <PaymentModal payment={payment} setPayment={setPayment} onSubmit={pay} onClose={() => setPayment(null)} />}
-    {review && <Modal title={`Review ${review.booking.trip_id.title}`} onClose={() => setReview(null)}><form className="form-stack review-modal-form" onSubmit={submitReview}><p>Your review will be linked automatically to this booking. No booking ID is needed.</p><label>Rating<select value={review.rating} onChange={(e) => setReview({ ...review, rating: e.target.value })}>{[5,4,3,2,1].map((value) => <option key={value} value={value}>{value} star{value > 1 ? 's' : ''}</option>)}</select></label><label>Comment<textarea required rows="5" value={review.comment} onChange={(e) => setReview({ ...review, comment: e.target.value })} placeholder="Share what made this trip memorable..." /></label><button className="button">Submit review</button></form></Modal>}
+    {review && <Modal title={`Review ${review.booking.trip_id.title}`} onClose={closeReviewModal}><form className="form-stack review-modal-form" onSubmit={submitReview}><p>Your review is linked to the booking you already opened.</p><label>Rating<select value={review.rating} onChange={(e) => setReview((prev) => ({ ...prev, rating: Number(e.target.value) }))}>{[5,4,3,2,1].map((value) => <option key={value} value={value}>{value} star{value > 1 ? 's' : ''}</option>)}</select></label><label>Comment<textarea required rows="5" value={review.comment} onChange={(e) => setReview({ ...review, comment: e.target.value })} placeholder="Share what made this trip memorable..." /></label><label>Photos (optional)<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={selectReviewPhotos} /><small>JPG, PNG, or WEBP. Up to 5 photos, 5MB each.</small></label>{Boolean(review.photos?.length) && <div className="review-upload-grid">{review.photos.map((photo) => <div className="review-upload-thumb" key={photo.id}><img src={photo.preview} alt="Review preview" /><button type="button" onClick={() => removeReviewPhoto(photo.id)} aria-label="Remove review photo">×</button></div>)}</div>}<button className="button">Submit review</button></form></Modal>}
   </section>;
+}
+
+const normalizePlannerDays = (days = []) =>
+  days.map((day, index) => ({
+    day: Number(day.day) || index + 1,
+    title: day.title || '',
+    activities: (day.activities || []).map((activity) => ({
+      time: activity.time || '',
+      title: activity.title || activity.activity || '',
+    })),
+  }));
+
+const createBlankDay = (day) => ({
+  day,
+  title: '',
+  activities: [{ time: '', title: '' }],
+});
+
+export function ItineraryPlannerPage() {
+  const { bookingId } = useParams();
+  const navigate = useNavigate();
+  const [booking, setBooking] = useState(null);
+  const [template, setTemplate] = useState(null);
+  const [itinerary, setItinerary] = useState(null);
+  const [mode, setMode] = useState('recommended');
+  const [customDays, setCustomDays] = useState([createBlankDay(1)]);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const loadPlanner = async () => {
+    const { data } = await api.get(`/itineraries/bookings/${bookingId}`);
+    const planner = data.data;
+    setBooking(planner.booking);
+    setTemplate(planner.template);
+    setItinerary(planner.itinerary);
+    if (planner.itinerary?.type === 'custom') {
+      setMode('custom');
+      setCustomDays(normalizePlannerDays(planner.itinerary.days));
+    } else if (planner.itinerary?.days?.length) {
+      setCustomDays(normalizePlannerDays(planner.itinerary.days));
+    } else {
+      setCustomDays([createBlankDay(1)]);
+    }
+  };
+
+  useEffect(() => {
+    loadPlanner().catch((err) => {
+      setError(err.response?.data?.message || 'Itinerary planner is not available for this booking.');
+    });
+  }, [bookingId]);
+
+  const addDay = () => {
+    setCustomDays((days) => [...days, createBlankDay(days.length + 1)]);
+  };
+  const addActivity = (dayIndex) => {
+    setCustomDays((days) => days.map((day, index) => index === dayIndex ? { ...day, activities: [...day.activities, { time: '', title: '' }] } : day));
+  };
+  const updateActivity = (dayIndex, activityIndex, field, value) => {
+    setCustomDays((days) => days.map((day, index) => {
+      if (index !== dayIndex) return day;
+      return {
+        ...day,
+        activities: day.activities.map((activity, currentIndex) => currentIndex === activityIndex ? { ...activity, [field]: value } : activity),
+      };
+    }));
+  };
+  const deleteActivity = (dayIndex, activityIndex) => {
+    setCustomDays((days) => days.map((day, index) => index === dayIndex ? { ...day, activities: day.activities.filter((_, currentIndex) => currentIndex !== activityIndex) } : day));
+  };
+
+  const saveRecommended = async () => {
+    setSaving(true); setError(''); setMessage('');
+    try {
+      const { data } = await api.post(`/itineraries/bookings/${bookingId}/recommended`);
+      setItinerary(data.data.itinerary);
+      setMessage('Recommended itinerary saved.');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not save recommended itinerary.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveCustom = async () => {
+    setSaving(true); setError(''); setMessage('');
+    try {
+      const days = customDays.map((day, index) => ({
+        ...day,
+        day: index + 1,
+        activities: day.activities.filter((activity) => activity.title.trim()),
+      }));
+      const { data } = await api.put(`/itineraries/bookings/${bookingId}/custom`, { days });
+      setItinerary(data.data.itinerary);
+      setMessage('Custom itinerary saved.');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not save custom itinerary.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!booking && !error) return <div className="page-loader">Opening itinerary planner...</div>;
+  const tripTitle = booking?.trip_id?.title || itinerary?.trip_title || 'Trip Itinerary';
+  const recommendedDays = normalizePlannerDays(template?.days || []);
+  const isLocked = Boolean(itinerary?.is_locked);
+
+  return <section className="section itinerary-page"><PageHeader eyebrow="ITINERARY PLANNER" title={tripTitle} text="Plan your journey before you travel." action={<button className="button ghost compact" onClick={() => navigate('/my-bookings')}>Back</button>} /><Alert success={message} error={error} />
+    {booking && <div className="itinerary-layout">
+      <div className="itinerary-mode-card content-card">
+        <button type="button" className={mode === 'recommended' ? 'selected' : ''} disabled={isLocked} onClick={() => setMode('recommended')}><strong>Recommended</strong><span>Use Wanderly's suggested itinerary.</span></button>
+        <button type="button" className={mode === 'custom' ? 'selected' : ''} disabled={isLocked} onClick={() => setMode('custom')}><strong>Custom</strong><span>Create your own schedule.</span></button>
+        {isLocked && <span className="status itinerary-ready">Itinerary Submitted</span>}
+      </div>
+
+      {mode === 'recommended' && <div className="content-card itinerary-editor">
+        <h2>Recommended Itinerary</h2>
+        {recommendedDays.length ? <ItineraryDays days={recommendedDays} /> : <Empty title="No template yet" text="This trip does not have a recommended itinerary template yet." />}
+        {!isLocked && <button className="button wide" disabled={saving || !recommendedDays.length} onClick={saveRecommended}>{saving ? 'Saving...' : 'Use Recommended Itinerary'}</button>}
+      </div>}
+
+      {mode === 'custom' && <div className="content-card itinerary-editor">
+        <div className="itinerary-editor-head"><h2>Custom Itinerary</h2>{!isLocked && <button type="button" className="button small" onClick={addDay}>+ Add Day</button>}</div>
+        <div className="custom-day-list">{customDays.map((day, dayIndex) => <section className="custom-day" key={dayIndex}><div className="custom-day-head"><h3>Day {dayIndex + 1}</h3>{!isLocked && <button type="button" className="button ghost small" onClick={() => addActivity(dayIndex)}>+ Add Activity</button>}</div>{day.activities.map((activity, activityIndex) => <div className="activity-row" key={`${dayIndex}-${activityIndex}`}><input type="time" value={activity.time} readOnly={isLocked} disabled={isLocked} onChange={(e) => updateActivity(dayIndex, activityIndex, 'time', e.target.value)} /><input value={activity.title} readOnly={isLocked} disabled={isLocked} onChange={(e) => updateActivity(dayIndex, activityIndex, 'title', e.target.value)} placeholder="Activity title" /><button type="button" className="button ghost small" disabled={isLocked} onClick={() => deleteActivity(dayIndex, activityIndex)}>Delete</button></div>)}</section>)}</div>
+        {isLocked ? <p className="review-guidance">Your itinerary has been finalized and can no longer be edited.</p> : <button className="button wide" disabled={saving} onClick={saveCustom}>{saving ? 'Saving...' : 'Save Itinerary'}</button>}
+      </div>}
+    </div>}
+  </section>;
+}
+
+function ItineraryDays({ days }) {
+  return <div className="itinerary-day-list">{days.map((day) => <section className="itinerary-day" key={day.day}><h3>Day {day.day}{day.title ? ` - ${day.title}` : ''}</h3><ul>{day.activities.map((activity, index) => <li key={`${day.day}-${index}`}><span>{activity.time || 'Flexible'}</span><strong>{activity.title}</strong></li>)}</ul></section>)}</div>;
 }
 
 function PaymentModal({ payment, setPayment, onSubmit, onClose }) {

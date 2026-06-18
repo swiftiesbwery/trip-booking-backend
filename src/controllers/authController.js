@@ -32,13 +32,13 @@ const register = async (req, res, next) => {
     const { name, email, password, phone } = req.body;
 
     if (!name?.trim() || !email?.trim() || !password) {
-      return next(new AppError('Nama, email, dan password wajib diisi', 400));
+      return next(new AppError('Name, email, and password are required', 400));
     }
     if (typeof password !== 'string' || password.length < 6) {
-      return next(new AppError('Password minimal 6 karakter', 400));
+      return next(new AppError('Password must be at least 6 characters long', 400));
     }
     if (phone !== undefined && typeof phone !== 'string') {
-      return next(new AppError('Phone harus berupa string', 400));
+      return next(new AppError('Phone must be a string', 400));
     }
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -46,7 +46,7 @@ const register = async (req, res, next) => {
       (await sqlRead.getUserByEmail(normalizedEmail)) ||
       (await User.findOne({ email: normalizedEmail }));
     if (existingUser) {
-      return next(new AppError('Email sudah terdaftar', 400));
+      return next(new AppError('Email is already registered', 400));
     }
 
     const user = await User.create({
@@ -68,16 +68,21 @@ const login = async (req, res, next) => {
     const { email, password } = req.body;
 
     if (!email?.trim() || !password) {
-      return next(new AppError('Email dan password wajib diisi', 400));
+      return next(new AppError('Email and password are required', 400));
     }
 
     const user = await sqlRead.getUserByEmail(email.trim().toLowerCase());
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      return next(new AppError('Email atau password salah', 401));
+      return next(new AppError('Incorrect email or password', 401));
     }
 
     sendTokenResponse(user, 200, res);
   } catch (err) {
+    console.error('Login failed:', {
+      email: req.body?.email,
+      code: err.code,
+      message: err.message,
+    });
     next(err);
   }
 };

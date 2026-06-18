@@ -20,12 +20,12 @@ const CATALOG_CATEGORIES = ['all', 'domestic', 'international'];
 
 const normalizeAndValidateDestinations = async (destinations) => {
   if (!Array.isArray(destinations) || destinations.length === 0) {
-    throw new AppError('Destinations minimal berisi 1 destinasi', 400);
+    throw new AppError('Destinations must include at least one destination', 400);
   }
 
   const normalized = destinations.map((item, index) => {
     if (!item || typeof item !== 'object') {
-      throw new AppError(`destinations[${index}] tidak valid`, 400);
+      throw new AppError(`destinations[${index}] is invalid`, 400);
     }
 
     assertObjectId(item.destination_id, `destinations[${index}].destination_id`);
@@ -42,19 +42,19 @@ const normalizeAndValidateDestinations = async (destinations) => {
 
   const destinationIds = normalized.map((item) => String(item.destination_id));
   if (new Set(destinationIds).size !== destinationIds.length) {
-    throw new AppError('Destination yang sama tidak boleh ditambahkan dua kali', 400);
+    throw new AppError('The same destination cannot be added twice', 400);
   }
 
   const visitOrders = normalized.map((item) => item.visit_order);
   if (new Set(visitOrders).size !== visitOrders.length) {
-    throw new AppError('visit_order tidak boleh duplikat', 400);
+    throw new AppError('visit_order cannot be duplicated', 400);
   }
 
   const existingDestinationCount = await Destination.countDocuments({
     _id: { $in: destinationIds },
   });
   if (existingDestinationCount !== destinationIds.length) {
-    throw new AppError('Satu atau lebih destination_id tidak ditemukan', 400);
+    throw new AppError('One or more destination_id values were not found', 400);
   }
 
   return normalized.sort((a, b) => a.visit_order - b.visit_order);
@@ -118,7 +118,7 @@ const updateTrip = async (req, res, next) => {
 
     const trip = await Trip.findById(req.params.id);
     if (!trip) {
-      return next(new AppError('Trip tidak ditemukan', 404));
+      return next(new AppError('Trip not found', 404));
     }
 
     Object.assign(trip, updates);
@@ -161,10 +161,10 @@ const getAllTrips = async (req, res, next) => {
       max: 100,
     });
     if (!CATALOG_SORTS.includes(sort)) {
-      return next(new AppError('Pilihan sort tidak valid', 400));
+      return next(new AppError('Invalid sort option', 400));
     }
     if (!CATALOG_CATEGORIES.includes(category)) {
-      return next(new AppError('Pilihan category tidak valid', 400));
+      return next(new AppError('Invalid category option', 400));
     }
 
     let parsedMinPrice;
@@ -177,7 +177,7 @@ const getAllTrips = async (req, res, next) => {
         parsedMaxPrice = parseNonNegativeNumber(maxPrice, 'maxPrice');
       }
       if (parsedMinPrice > parsedMaxPrice) {
-        return next(new AppError('minPrice tidak boleh lebih besar dari maxPrice', 400));
+        return next(new AppError('minPrice cannot be greater than maxPrice', 400));
       }
     }
 
@@ -187,14 +187,14 @@ const getAllTrips = async (req, res, next) => {
       if (startDate !== undefined) {
         const parsed = new Date(startDate);
         if (Number.isNaN(parsed.getTime())) {
-          return next(new AppError('startDate tidak valid', 400));
+          return next(new AppError('startDate is invalid', 400));
         }
         parsedStartDate = startDate;
       }
       if (endDate !== undefined) {
         const parsed = new Date(endDate);
         if (Number.isNaN(parsed.getTime())) {
-          return next(new AppError('endDate tidak valid', 400));
+          return next(new AppError('endDate is invalid', 400));
         }
         parsedEndDate = endDate;
       }
@@ -220,7 +220,7 @@ const getAllTrips = async (req, res, next) => {
       const min = minDays !== undefined ? parsePositiveInteger(minDays, 'minDays') : null;
       const max = maxDays !== undefined ? parsePositiveInteger(maxDays, 'maxDays') : null;
       if (min !== null && max !== null && min > max) {
-        return next(new AppError('minDays tidak boleh lebih besar dari maxDays', 400));
+        return next(new AppError('minDays cannot be greater than maxDays', 400));
       }
       filteredTrips = trips.filter((trip) => {
         const duration =
@@ -252,21 +252,19 @@ const getTripById = async (req, res, next) => {
     const trip = await sqlRead.getTripByMongoId(req.params.id);
 
     if (!trip) {
-      return next(new AppError('Trip tidak ditemukan', 404));
+      return next(new AppError('Trip not found', 404));
     }
 
-    const ratingData = mongoose.isValidObjectId(req.params.id)
-      ? await Review.aggregate([
-          { $match: { trip_id: new mongoose.Types.ObjectId(req.params.id) } },
-          {
-            $group: {
-              _id: '$trip_id',
-              avgRating: { $avg: '$rating' },
-              totalReviews: { $sum: 1 },
-            },
-          },
-        ])
-      : [];
+    const ratingData = await Review.aggregate([
+      { $match: { trip_id: trip._id } },
+      {
+        $group: {
+          _id: '$trip_id',
+          avgRating: { $avg: '$rating' },
+          totalReviews: { $sum: 1 },
+        },
+      },
+    ]);
 
     const rating = ratingData.length
       ? {
@@ -289,14 +287,10 @@ const getTripReviews = async (req, res, next) => {
   try {
     const trip = await sqlRead.getTripByMongoId(req.params.id);
     if (!trip) {
-      return next(new AppError('Trip tidak ditemukan', 404));
+      return next(new AppError('Trip not found', 404));
     }
 
-    const reviews = mongoose.isValidObjectId(req.params.id)
-      ? await Review.find({ trip_id: req.params.id })
-          .populate('user_id', 'name')
-          .sort({ createdAt: -1 })
-      : [];
+    const reviews = await Review.find({ trip_id: trip._id }).sort({ createdAt: -1 });
 
     res.status(200).json({
       status: 'success',

@@ -22,7 +22,7 @@ wishlistSchema.pre('validate', function (next) {
   if ((!this.trip_id && !this.destination_id) || (this.trip_id && this.destination_id)) {
     this.invalidate(
       'trip_id',
-      'Wishlist harus berisi salah satu trip atau destination'
+      'Wishlist must contain either a trip or a destination'
     );
   }
   next();

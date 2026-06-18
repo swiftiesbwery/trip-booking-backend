@@ -18,13 +18,13 @@ const paymentSchema = new mongoose.Schema(
     amount: {
       type: Number,
       required: true,
-      min: [1, 'Jumlah pembayaran harus lebih dari 0'],
+      min: [1, 'Payment amount must be greater than 0'],
     },
 
     method: {
       type: String,
       enum: ['QRIS', 'Transfer Bank', 'Debit/Kredit'],
-      required: [true, 'Metode pembayaran wajib diisi'],
+      required: [true, 'Payment method is required'],
     },
 
     proof_url: {
@@ -39,7 +39,7 @@ const paymentSchema = new mongoose.Schema(
 
     card_last4: {
       type: String,
-      match: [/^\d{4}$/, 'card_last4 harus 4 digit'],
+      match: [/^\d{4}$/, 'card_last4 must be 4 digits'],
       default: null,
     },
 
