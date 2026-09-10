@@ -8,5 +8,10 @@ frontend/node_modules/
 uploads/
 frontend/dist/
 
+mongodb-backup/
+mongodb-backup-full/
+mysql-backup.sql
+
 .DS_Store
 Thumbs.db
+

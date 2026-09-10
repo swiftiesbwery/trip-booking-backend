@@ -7,3 +7,5 @@ uploads/reviews/*
 .agents/
 .codex/
 npm-debug.log*
+
+mongodb-backup-full/
